@@ -1,0 +1,82 @@
+[build-system]
+requires = ["hatchling>=1.27"]
+build-backend = "hatchling.build"
+
+[project]
+name = "catex-workbench"
+version = "0.27.0"
+description = "CatEx: traceable scientific core and interactive workbench for catalysis workflows."
+readme = "README.md"
+requires-python = ">=3.12"
+dependencies = [
+  "numpy>=2.0",
+  "pymatgen>=2025.1",
+]
+
+[project.optional-dependencies]
+web = [
+  "fastapi>=0.116,<1",
+  "paramiko>=3.5,<5",
+  "python-multipart>=0.0.20,<1",
+  "uvicorn>=0.35,<1",
+]
+hpc = [
+  "paramiko>=3.5,<5",
+]
+dev = [
+  "build>=1.2",
+  "httpx>=0.28,<1",
+  "pytest>=8.3",
+  "pytest-cov>=6.0",
+  "ruff>=0.11",
+]
+
+[project.scripts]
+catex = "catex.cli:main"
+
+[tool.hatch.build.targets.wheel]
+packages = ["src/catex", "src/catex_app", "src/catex_web"]
+
+[tool.hatch.build.targets.sdist]
+include = [
+  "/README.md",
+  "/pyproject.toml",
+  "/docs/SCHEMAS.md",
+  "/docs/VASP_INPUT_VALIDATION.md",
+  "/docs/VASP_OUTPUT_PARSING.md",
+  "/docs/MATERIALS_STUDIO_ADAPTER.md",
+  "/docs/PROTOCOL_AND_SLURM_DRY_RUN.md",
+  "/docs/HPC_POTCAR_METADATA.md",
+  "/docs/SLURM_OBSERVATION_AND_RESTART.md",
+  "/docs/HPC_SHELL_MODES.md",
+  "/docs/RUN_BINDING.md",
+  "/docs/SCIENTIFIC_RESULT_REVIEW.md",
+  "/docs/ENERGY_COMPATIBILITY.md",
+  "/docs/CATALYSIS_IDENTITIES.md",
+  "/docs/REACTION_THERMOCHEMISTRY.md",
+  "/docs/STRUCTURE_AND_CONFIGURATION_GENERATION.md",
+  "/docs/ELECTRONIC_STRUCTURE_ANALYSIS.md",
+  "/docs/REACTION_NETWORK_CHE_AND_READINESS.md",
+  "/docs/WEB_POC.md",
+  "/docs/adr/0003-web-workbench-architecture.md",
+  "/apps/web",
+  "/package.json",
+  "/pnpm-lock.yaml",
+  "/pnpm-workspace.yaml",
+  "/scripts/start_web_poc.mjs",
+  "/启动 CatEx 工作台.cmd",
+  "/src",
+  "/tests",
+]
+
+[tool.pytest.ini_options]
+addopts = "-ra --strict-markers"
+testpaths = ["tests"]
+
+[tool.ruff]
+line-length = 100
+target-version = "py312"
+extend-exclude = ["projects", "Reading-notes-code"]
+
+[tool.ruff.lint]
+select = ["E", "F", "I", "UP", "B", "SIM", "RUF"]

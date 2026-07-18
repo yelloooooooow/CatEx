@@ -1,0 +1,156 @@
+{
+  "schema_version": "catex.project-readiness-input.v1",
+  "case_id": "paper4-co2rr-dac-reproduction",
+  "requirements": [
+    {
+      "requirement_id": "paper-si-sources-reviewed",
+      "category": "reference_data",
+      "description": "Paper and supporting-information method sources are locally captured and reviewed.",
+      "required": true,
+      "status": "satisfied",
+      "evidence_sha256s": [
+        "1b6898959b59b97c29c7271eeefd7647b30f91134649494e458f7129a72f1c78",
+        "e7dfc8f97e9050c230407dc7dddb6df8c01c886aa91ea52cc899ba63fa68e741"
+      ],
+      "note": "Evidence identifies the locally reviewed extracted text; it does not fill information absent from the publications.",
+      "assessed_by": "project-audit",
+      "assessed_at_utc": "2026-07-16T13:00:00Z"
+    },
+    {
+      "requirement_id": "table-s2-digitized",
+      "category": "reference_data",
+      "description": "All 91 Table S2 rows are digitized as a reference dataset.",
+      "required": true,
+      "status": "satisfied",
+      "evidence_sha256s": [
+        "995867210f73271b64c1306455eef94cddd721dc0c7734b64c1e66da22aabf9f"
+      ],
+      "note": "Digitization is complete, but the scientific column interpretation remains a separate blocker.",
+      "assessed_by": "project-audit",
+      "assessed_at_utc": "2026-07-16T13:00:00Z"
+    },
+    {
+      "requirement_id": "hpc-environment-smoke-verified",
+      "category": "execution",
+      "description": "A non-production VASP, VASPsol, MPI, PMI2 and Slurm environment smoke chain is documented.",
+      "required": true,
+      "status": "satisfied",
+      "evidence_sha256s": [
+        "08f380a80d1e4a98115cd72830ff7f06aa3d70fe4de3560d596009fd8238d098"
+      ],
+      "note": "The smoke chain proves environment compatibility only and its energy is permanently ineligible for science.",
+      "assessed_by": "project-audit",
+      "assessed_at_utc": "2026-07-16T13:00:00Z"
+    },
+    {
+      "requirement_id": "author-equivalent-production-coordinates",
+      "category": "structure",
+      "description": "Production catalyst coordinates, atom order, constraints and structural provenance are scientifically accepted.",
+      "required": true,
+      "status": "blocked",
+      "evidence_sha256s": [],
+      "note": "The paper and SI do not provide exact runnable coordinates or complete constraints; generated candidates cannot be called author structures.",
+      "assessed_by": "project-audit",
+      "assessed_at_utc": "2026-07-16T13:00:00Z"
+    },
+    {
+      "requirement_id": "production-storage-policy",
+      "category": "storage",
+      "description": "A production project or scratch root, quota and output-retention policy are approved.",
+      "required": true,
+      "status": "blocked",
+      "evidence_sha256s": [],
+      "note": "Only the constrained smoke-test location is authorized; no production storage scope or retention policy has been supplied.",
+      "assessed_by": "project-audit",
+      "assessed_at_utc": "2026-07-16T13:00:00Z"
+    },
+    {
+      "requirement_id": "production-protocol-reviews",
+      "category": "protocol",
+      "description": "Each catalyst, adsorbate and spin variant has an approved production VASP protocol and energy-family identity.",
+      "required": true,
+      "status": "blocked",
+      "evidence_sha256s": [],
+      "note": "The environment-smoke protocol is deliberately non-production; 3x3x1 relaxation, VASPsol, spin and retention settings still require reviews.",
+      "assessed_by": "project-audit",
+      "assessed_at_utc": "2026-07-16T13:00:00Z"
+    },
+    {
+      "requirement_id": "nitrogen-chemical-potential",
+      "category": "reference_data",
+      "description": "The nitrogen chemical-potential reference used for formation energies is explicitly defined and reviewed.",
+      "required": true,
+      "status": "blocked",
+      "evidence_sha256s": [],
+      "note": "The publication labels the reference only as nitrogen and does not define the required state or correction convention.",
+      "assessed_by": "project-audit",
+      "assessed_at_utc": "2026-07-16T13:00:00Z"
+    },
+    {
+      "requirement_id": "per-state-thermochemistry",
+      "category": "thermochemistry",
+      "description": "Every surface, gas and adsorbed state has sourced ZPE, enthalpy, entropy, solvation and standard-state corrections.",
+      "required": true,
+      "status": "blocked",
+      "evidence_sha256s": [],
+      "note": "Per-intermediate vibrational data, gas-table values and the thermochemistry temperature are not supplied in the paper or SI.",
+      "assessed_by": "project-audit",
+      "assessed_at_utc": "2026-07-16T13:00:00Z"
+    },
+    {
+      "requirement_id": "reaction-network-identities-reviewed",
+      "category": "reaction_network",
+      "description": "CO and HCOOH pathway states and balanced reactions are bound to accepted catalyst and adsorbate identities.",
+      "required": true,
+      "status": "blocked",
+      "evidence_sha256s": [],
+      "note": "A conceptual draft exists, but exact adsorption configurations and immutable reaction identities cannot precede accepted structures.",
+      "assessed_by": "project-audit",
+      "assessed_at_utc": "2026-07-16T13:00:00Z"
+    },
+    {
+      "requirement_id": "che-protocol-reviewed",
+      "category": "thermochemistry",
+      "description": "The Paper 4 CHE temperature, potential scale, pH and pair-count conventions are complete and approved.",
+      "required": true,
+      "status": "blocked",
+      "evidence_sha256s": [],
+      "note": "SHE and pH zero are documented, but the thermochemistry temperature is absent and must not default silently.",
+      "assessed_by": "project-audit",
+      "assessed_at_utc": "2026-07-16T13:00:00Z"
+    },
+    {
+      "requirement_id": "table-s2-column-interpretation",
+      "category": "reference_data",
+      "description": "The Table S2 printed headers and main-text representative values have a single scientifically approved interpretation.",
+      "required": true,
+      "status": "blocked",
+      "evidence_sha256s": [],
+      "note": "The printed column order conflicts with representative values in the main text; both interpretations must remain visible pending resolution.",
+      "assessed_by": "project-audit",
+      "assessed_at_utc": "2026-07-16T13:00:00Z"
+    },
+    {
+      "requirement_id": "production-runs-scientifically-accepted",
+      "category": "results",
+      "description": "Required production runs have complete run bindings and explicit scientific-result acceptance records.",
+      "required": true,
+      "status": "blocked",
+      "evidence_sha256s": [],
+      "note": "No Paper 4 production calculation has been authorized or run; the prior smoke result is permanently ineligible.",
+      "assessed_by": "project-audit",
+      "assessed_at_utc": "2026-07-16T13:00:00Z"
+    },
+    {
+      "requirement_id": "production-derived-results",
+      "category": "results",
+      "description": "Compatible energies, free energies, CHE results and electronic analyses are derived from accepted production evidence.",
+      "required": true,
+      "status": "blocked",
+      "evidence_sha256s": [],
+      "note": "Derived Paper 4 results cannot exist before the blocked structures, protocols, thermochemistry and production runs are closed.",
+      "assessed_by": "project-audit",
+      "assessed_at_utc": "2026-07-16T13:00:00Z"
+    }
+  ]
+}

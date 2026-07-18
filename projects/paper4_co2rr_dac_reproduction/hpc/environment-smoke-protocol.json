@@ -1,0 +1,38 @@
+{
+  "schema_version": "catex.scientific-protocol.v1",
+  "protocol_id": "paper4-nizn-environment-smoke-v1-nonproduction",
+  "target_vasp_version": "5.4.4",
+  "incar": {
+    "ALGO": "Fast",
+    "EB_K": "78.4",
+    "EDIFF": "1E-4",
+    "ENCUT": "500",
+    "GGA": "PE",
+    "IBRION": "-1",
+    "ICHARG": "2",
+    "IDIPOL": "3",
+    "ISMEAR": "0",
+    "ISPIN": "2",
+    "ISTART": "0",
+    "ISYM": "0",
+    "IVDW": "12",
+    "LCHARG": "F",
+    "LDIPOL": "T",
+    "LREAL": "Auto",
+    "LSOL": "T",
+    "LWAVE": "F",
+    "MAGMOM": "1*2 69*0",
+    "NCORE": "2",
+    "NELM": "4",
+    "NSW": "0",
+    "NWRITE": "2",
+    "PREC": "Normal",
+    "SIGMA": "0.05"
+  },
+  "kpoints": {
+    "comment": "Non-production Gamma-only environment smoke mesh",
+    "generation_mode": "gamma",
+    "subdivisions": [1, 1, 1],
+    "shift": [0, 0, 0]
+  }
+}

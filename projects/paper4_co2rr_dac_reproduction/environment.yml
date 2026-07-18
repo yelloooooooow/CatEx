@@ -1,0 +1,14 @@
+name: dft-common-py312
+channels:
+  - defaults
+dependencies:
+  - python=3.12
+  - pip
+  - pip:
+      - numpy==2.5.1
+      - pymatgen==2026.5.4
+      - ase==3.29.0
+      - chgnet==0.4.2
+      - torch==2.13.0
+      - pypdf==6.14.2
+      - pdfplumber==0.11.10

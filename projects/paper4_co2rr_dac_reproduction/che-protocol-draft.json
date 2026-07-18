@@ -1,0 +1,14 @@
+{
+  "schema_version": "catex.paper4-che-protocol-draft.v1",
+  "protocol_id": "paper4-che-u0-she-draft",
+  "reference_electrode": "SHE",
+  "electrode_potential_v": 0.0,
+  "pH": 0.0,
+  "temperature_kelvin": null,
+  "source_sha256s": [
+    "0285782cdc4c9aed55977cf9ef292a7a03ba70f62f7958edb49039899dce006e"
+  ],
+  "status": "blocked_missing_temperature",
+  "manual_review_status": "blocked",
+  "note": "The SI specifies CHE, SHE and pH zero but does not state the thermochemistry temperature; no default is inserted."
+}

@@ -1,0 +1,84 @@
+# Local agent and editor state
+.agents/
+.codex/
+.playwright-cli/
+.tools/
+.vscode/
+.idea/
+
+# Python environments and caches
+.venvs/
+.venv/
+venv/
+__pycache__/
+*.py[cod]
+.pytest_cache/
+.test-tmp/
+.ruff_cache/
+.mypy_cache/
+.coverage
+htmlcov/
+build/
+dist/
+*.egg-info/
+
+# JavaScript package and build state
+node_modules/
+**/node_modules/
+.pnpm-store/
+apps/web/dist/
+*.tsbuildinfo
+
+# Local credentials and environment overrides
+.env
+.env.*
+!.env.example
+*.pem
+*.key
+*.ppk
+*.pfx
+*.p12
+id_rsa*
+id_ed25519*
+*credentials*
+*secrets*
+
+# Licensed or externally supplied references
+Reading-notes-code/
+**/references/
+!**/references/
+**/references/*
+!**/references/README.md
+*.pdf
+
+# VASP licensed inputs and large/generated outputs
+**/POTCAR
+**/POTCAR.gz
+**/POTCAR.*
+!**/POTCAR.metadata.json
+!src/catex/vasp/potcar.py
+**/WAVECAR*
+**/CHGCAR*
+**/AECCAR*
+**/vasprun.xml*
+**/OUTCAR*
+**/PROCAR*
+**/DOSCAR*
+**/EIGENVAL*
+**/IBZKPT*
+**/XDATCAR*
+**/LOCPOT*
+**/ELFCAR*
+**/PARCHG*
+**/REPORT*
+**/slurm-*.out
+
+# Runtime workspaces
+**/.material-studio-mcp/jobs/
+**/calculations/**
+**/logs/**
+**/scratch/**
+**/staging/**
+
+# Keep deliberately curated synthetic test fixtures when added later
+!tests/fixtures/synthetic/**

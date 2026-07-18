@@ -1,0 +1,11 @@
+{
+  "schema_version": "catex.slurm-cluster-policy.v1",
+  "policy_id": "synthetic-slurm-policy",
+  "allowed_partitions": ["compute", "debug"],
+  "allowed_modules": ["intel/oneapi2023.2_impi"],
+  "allowed_executables": ["vasp_std"],
+  "allowed_mpi_plugins": ["pmi2"],
+  "max_nodes": 2,
+  "max_cores_per_node": 64,
+  "max_walltime_minutes": 1440
+}

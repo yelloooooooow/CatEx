@@ -1,0 +1,12 @@
+{
+  "name": "catex-workspace",
+  "private": true,
+  "packageManager": "pnpm@11.9.0",
+  "scripts": {
+    "web:poc": "node scripts/start_web_poc.mjs",
+    "web:dev": "pnpm --dir apps/web dev",
+    "web:build": "pnpm --dir apps/web build",
+    "web:test": "pnpm --dir apps/web test",
+    "web:check": "pnpm --dir apps/web check"
+  }
+}

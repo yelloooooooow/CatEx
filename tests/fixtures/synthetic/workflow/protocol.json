@@ -1,0 +1,22 @@
+{
+  "schema_version": "catex.scientific-protocol.v1",
+  "protocol_id": "synthetic-pbe-static",
+  "target_vasp_version": "5.4.4",
+  "incar": {
+    "EDIFF": "1E-6",
+    "ENCUT": "500",
+    "ISMEAR": "0",
+    "ISPIN": "1",
+    "LCHARG": "F",
+    "LWAVE": "F",
+    "NCORE": "4",
+    "NSW": "0",
+    "SIGMA": "0.05"
+  },
+  "kpoints": {
+    "comment": "Synthetic Gamma mesh",
+    "generation_mode": "gamma",
+    "subdivisions": [3, 3, 3],
+    "shift": [0, 0, 0]
+  }
+}

@@ -1,0 +1,24 @@
+{
+  "schema_version": "catex.potcar-metadata.v1",
+  "potential_family": "SYNTHETIC_PAW_PBE_TEST_ONLY",
+  "datasets": [
+    {
+      "element": "Na",
+      "potential_label": "Na_pv",
+      "titel": "PAW_PBE Na_pv SYNTHETIC",
+      "lexch": "PE",
+      "zval": 9,
+      "enmax_eV": 400,
+      "sha256": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+    },
+    {
+      "element": "Cl",
+      "potential_label": "Cl",
+      "titel": "PAW_PBE Cl SYNTHETIC",
+      "lexch": "PE",
+      "zval": 7,
+      "enmax_eV": 450,
+      "sha256": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"
+    }
+  ]
+}

@@ -1,0 +1,42 @@
+##### Initial I/O #####
+SYSTEM = NiZn_NC
+KPAR   = 1
+NCORE  = 2
+ISTART = 0
+ICHARG = 2
+
+##### Electronic SCF #####
+PREC   = Accurate
+ENCUT  = 500
+GGA    = PE
+ALGO   = All
+NELM   = 300
+NELMIN = 6
+EDIFF  = 1E-5
+ISMEAR = 0
+SIGMA  = 0.05
+LREAL  = Auto
+
+##### Ionic relaxation #####
+IBRION = 2
+POTIM  = 0.5
+NSW    = 300
+ISIF   = 2
+EDIFFG = -0.03
+
+##### Spin #####
+ISPIN  = 2
+MAGMOM = 1*2 69*0
+
+##### vdW & Solvent & Dipole correction #####
+IVDW   = 12
+LSOL   = .TRUE.
+EB_K   = 78.4
+LDIPOL = .TRUE.
+IDIPOL = 3
+ISYM   = 0
+
+##### Output #####
+LWAVE  = .TRUE.
+LCHARG = .TRUE.
+LORBIT = 11

@@ -1,0 +1,17 @@
+{
+  "schema_version": "catex.paper4-thermochemistry-requirements.v1",
+  "temperature_kelvin": null,
+  "status": "blocked_missing_sources",
+  "states": [
+    {"state_id": "surface", "source_status": "missing_reviewed_convention", "zero_point_energy_eV": null, "thermal_enthalpy_eV": null, "entropy_eV_per_kelvin": null, "solvation_free_energy_eV": null, "other_free_energy_eV": null},
+    {"state_id": "co2-gas", "source_status": "missing_tabulated_values", "zero_point_energy_eV": null, "thermal_enthalpy_eV": null, "entropy_eV_per_kelvin": null, "solvation_free_energy_eV": null, "other_free_energy_eV": null},
+    {"state_id": "water-liquid", "source_status": "missing_tabulated_values", "zero_point_energy_eV": null, "thermal_enthalpy_eV": null, "entropy_eV_per_kelvin": null, "solvation_free_energy_eV": null, "other_free_energy_eV": null},
+    {"state_id": "co-gas", "source_status": "missing_tabulated_values", "zero_point_energy_eV": null, "thermal_enthalpy_eV": null, "entropy_eV_per_kelvin": null, "solvation_free_energy_eV": null, "other_free_energy_eV": null},
+    {"state_id": "hcooh-liquid", "source_status": "missing_tabulated_values", "zero_point_energy_eV": null, "thermal_enthalpy_eV": null, "entropy_eV_per_kelvin": null, "solvation_free_energy_eV": null, "other_free_energy_eV": null},
+    {"state_id": "co2-adsorbed", "source_status": "missing_vibrational_analysis", "zero_point_energy_eV": null, "thermal_enthalpy_eV": null, "entropy_eV_per_kelvin": null, "solvation_free_energy_eV": null, "other_free_energy_eV": null},
+    {"state_id": "cooh-adsorbed", "source_status": "missing_vibrational_analysis", "zero_point_energy_eV": null, "thermal_enthalpy_eV": null, "entropy_eV_per_kelvin": null, "solvation_free_energy_eV": null, "other_free_energy_eV": null},
+    {"state_id": "co-adsorbed", "source_status": "missing_vibrational_analysis", "zero_point_energy_eV": null, "thermal_enthalpy_eV": null, "entropy_eV_per_kelvin": null, "solvation_free_energy_eV": null, "other_free_energy_eV": null},
+    {"state_id": "ocho-adsorbed", "source_status": "missing_vibrational_analysis", "zero_point_energy_eV": null, "thermal_enthalpy_eV": null, "entropy_eV_per_kelvin": null, "solvation_free_energy_eV": null, "other_free_energy_eV": null}
+  ],
+  "note": "Null means unknown and blocked. No missing component is represented by a numerical zero."
+}

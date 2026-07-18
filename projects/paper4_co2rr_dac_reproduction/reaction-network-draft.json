@@ -1,0 +1,28 @@
+{
+  "schema_version": "catex.paper4-reaction-network-draft.v1",
+  "network_id": null,
+  "status": "identity_blocked",
+  "manual_review_status": "blocked",
+  "states": [
+    {"state_id": "surface", "formula": null, "phase": "surface", "identity_sha256": null, "status": "structure_identity_missing"},
+    {"state_id": "co2-gas", "formula": "CO2", "phase": "gas", "identity_sha256": null, "status": "reference_review_missing"},
+    {"state_id": "proton", "formula": "H", "formal_charge_e": 1, "phase": "solvated", "identity_sha256": null, "status": "reference_review_missing"},
+    {"state_id": "electron", "formula": "", "formal_charge_e": -1, "phase": "electron", "identity_sha256": null, "status": "reference_review_missing"},
+    {"state_id": "water-liquid", "formula": "H2O", "phase": "liquid", "identity_sha256": null, "status": "reference_review_missing"},
+    {"state_id": "co-gas", "formula": "CO", "phase": "gas", "identity_sha256": null, "status": "reference_review_missing"},
+    {"state_id": "hcooh-liquid", "formula": "CH2O2", "phase": "liquid", "identity_sha256": null, "status": "reference_review_missing"},
+    {"state_id": "co2-adsorbed", "formula": null, "phase": "adsorbed", "identity_sha256": null, "status": "configuration_identity_missing"},
+    {"state_id": "cooh-adsorbed", "formula": null, "phase": "adsorbed", "identity_sha256": null, "status": "configuration_identity_missing"},
+    {"state_id": "co-adsorbed", "formula": null, "phase": "adsorbed", "identity_sha256": null, "status": "configuration_identity_missing"},
+    {"state_id": "ocho-adsorbed", "formula": null, "phase": "adsorbed", "identity_sha256": null, "status": "configuration_identity_missing"}
+  ],
+  "reactions": [
+    {"reaction_id": "co2-adsorption", "reactants": ["surface", "co2-gas"], "products": ["co2-adsorbed"], "proton_electron_pairs_consumed": 0, "reaction_identity_sha256": null, "status": "identity_blocked"},
+    {"reaction_id": "co-path-pcet-1", "reactants": ["co2-adsorbed", "proton", "electron"], "products": ["cooh-adsorbed"], "proton_electron_pairs_consumed": 1, "reaction_identity_sha256": null, "status": "identity_blocked"},
+    {"reaction_id": "co-path-pcet-2", "reactants": ["cooh-adsorbed", "proton", "electron"], "products": ["co-adsorbed", "water-liquid"], "proton_electron_pairs_consumed": 1, "reaction_identity_sha256": null, "status": "identity_blocked"},
+    {"reaction_id": "co-desorption", "reactants": ["co-adsorbed"], "products": ["surface", "co-gas"], "proton_electron_pairs_consumed": 0, "reaction_identity_sha256": null, "status": "identity_blocked"},
+    {"reaction_id": "hcooh-path-pcet-1", "reactants": ["co2-adsorbed", "proton", "electron"], "products": ["ocho-adsorbed"], "proton_electron_pairs_consumed": 1, "reaction_identity_sha256": null, "status": "identity_blocked"},
+    {"reaction_id": "hcooh-path-pcet-2", "reactants": ["ocho-adsorbed", "proton", "electron"], "products": ["surface", "hcooh-liquid"], "proton_electron_pairs_consumed": 1, "reaction_identity_sha256": null, "status": "identity_blocked"}
+  ],
+  "note": "Conceptual pathways only. No state or reaction is scientifically accepted until exact structures, references and hash-bound reviews exist."
+}

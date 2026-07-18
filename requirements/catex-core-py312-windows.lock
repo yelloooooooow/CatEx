@@ -1,0 +1,55 @@
+# CatEx PR-001 resolved environment snapshot
+# Platform: Windows x86_64
+# Python: 3.12.13
+# Generated: 2026-07-15
+# Install the project first with: python -m pip install -e ".[dev]"
+# This file records the tested resolution; pyproject.toml remains the direct dependency source.
+
+bibtexparser==1.4.4
+build==1.5.0
+certifi==2026.6.17
+charset-normalizer==3.4.9
+colorama==0.4.6
+contourpy==1.3.3
+coverage==7.15.1
+cycler==0.12.1
+fonttools==4.63.0
+idna==3.18
+iniconfig==2.3.0
+joblib==1.5.3
+kiwisolver==1.5.0
+lxml==6.1.1
+matplotlib==3.11.0
+monty==2026.5.18
+mpmath==1.3.0
+narwhals==2.24.0
+networkx==3.6.1
+numpy==2.5.1
+orjson==3.11.9
+packaging==26.2
+palettable==3.3.3
+pandas==3.0.3
+pillow==12.3.0
+plotly==6.9.0
+pluggy==1.6.0
+Pygments==2.20.0
+pymatgen==2026.5.4
+pymatgen-core==2026.5.18
+pyparsing==3.3.2
+pyproject_hooks==1.2.0
+pytest==9.1.1
+pytest-cov==7.1.0
+python-dateutil==2.9.0.post0
+requests==2.34.2
+ruamel.yaml==0.19.1
+ruff==0.15.21
+scipy==1.18.0
+six==1.17.0
+spglib==2.7.0
+sympy==1.14.0
+tabulate==0.10.0
+tqdm==4.68.4
+typing_extensions==4.16.0
+tzdata==2026.3
+uncertainties==3.2.3
+urllib3==2.7.0
