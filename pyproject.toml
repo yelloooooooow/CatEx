@@ -7,7 +7,13 @@ name = "catex-workbench"
 version = "0.27.0"
 description = "CatEx: traceable scientific core and interactive workbench for catalysis workflows."
 readme = "README.md"
+license = "BSD-3-Clause"
+license-files = ["LICENSE"]
 requires-python = ">=3.12"
+classifiers = [
+  "License :: OSI Approved :: BSD License",
+  "Programming Language :: Python :: 3.12",
+]
 dependencies = [
   "numpy>=2.0",
   "pymatgen>=2025.1",
@@ -39,6 +45,7 @@ packages = ["src/catex", "src/catex_app", "src/catex_web"]
 
 [tool.hatch.build.targets.sdist]
 include = [
+  "/LICENSE",
   "/README.md",
   "/pyproject.toml",
   "/docs/SCHEMAS.md",

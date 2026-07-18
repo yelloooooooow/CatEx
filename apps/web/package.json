@@ -2,6 +2,7 @@
   "name": "@catex/workbench",
   "version": "0.1.0",
   "private": true,
+  "license": "BSD-3-Clause",
   "type": "module",
   "scripts": {
     "dev": "vite --host 127.0.0.1",

@@ -1,6 +1,7 @@
 {
   "name": "catex-workspace",
   "private": true,
+  "license": "BSD-3-Clause",
   "packageManager": "pnpm@11.9.0",
   "scripts": {
     "web:poc": "node scripts/start_web_poc.mjs",
