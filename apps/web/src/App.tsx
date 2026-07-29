@@ -74,6 +74,8 @@ import type {
   CalculationConfig,
   CalculationResult,
   CalculationPlanResponse,
+  ChgnetPreRelaxationConfig,
+  ChgnetPreRelaxationResponse,
   Diagnostic,
   EnergyDerivation,
   HpcObservation,
@@ -151,6 +153,15 @@ interface SavedWorkflow {
   edges: ScientificFlowEdge[]
 }
 
+interface ReactionOutputImport {
+  filenames: string[]
+  energyKind: 'sigma_zero' | 'without_entropy' | 'free_energy'
+  energyEv: number
+  status: string
+  scientificallyComplete: boolean
+  ionicConvergence: string
+}
+
 type InputFileKey = 'poscar' | 'incar' | 'kpoints' | 'potcar' | 'slurm'
 
 interface WorkspaceFileHandle {
@@ -177,6 +188,20 @@ const NODE_VIEW: Record<string, WorkspaceView> = {
   'execution.mock': 'runs',
   'vasp.parse': 'results',
   'results.summarize': 'results',
+}
+
+const LEGACY_STRUCTURE_WORKFLOW_NODES = new Set(['structure.upload', 'structure.inspect'])
+
+function hasLegacyStructureWorkflowNodes(nodes: Array<{ data?: { definition?: { type_id?: string } }; type_id?: string }>): boolean {
+  return nodes.some((node) => LEGACY_STRUCTURE_WORKFLOW_NODES.has(
+    node.type_id ?? node.data?.definition?.type_id ?? '',
+  ))
+}
+
+function withoutRecordKey<T>(record: Record<string, T>, key: string): Record<string, T> {
+  const next = { ...record }
+  delete next[key]
+  return next
 }
 
 function serializeIncar(config: CalculationConfig | null): string {
@@ -352,6 +377,15 @@ function App() {
   const [constraintSummary, setConstraintSummary] = useState('')
   const [focusedConstraintAtom, setFocusedConstraintAtom] = useState<number | null>(null)
   const [showAllConstraintAtomIndices, setShowAllConstraintAtomIndices] = useState(false)
+  const [chgnetEnabled, setChgnetEnabled] = useState(false)
+  const [chgnetModel, setChgnetModel] = useState<ChgnetPreRelaxationConfig['model_name']>('0.3.0')
+  const [chgnetOptimizer, setChgnetOptimizer] = useState<ChgnetPreRelaxationConfig['optimizer']>('FIRE')
+  const [chgnetFmax, setChgnetFmax] = useState(0.05)
+  const [chgnetMaxSteps, setChgnetMaxSteps] = useState(500)
+  const [chgnetRelaxCell, setChgnetRelaxCell] = useState(false)
+  const [chgnetDevice, setChgnetDevice] = useState<ChgnetPreRelaxationConfig['device']>('auto')
+  const [chgnetConfirmed, setChgnetConfirmed] = useState(false)
+  const [chgnetResult, setChgnetResult] = useState<ChgnetPreRelaxationResponse | null>(null)
   const [potcarLabelText, setPotcarLabelText] = useState('')
   const [projectMaxWalltimeText, setProjectMaxWalltimeText] = useState('')
   const [runs, setRuns] = useState<RunSummary[]>([])
@@ -379,6 +413,7 @@ function App() {
   const [reactionTemplates, setReactionTemplates] = useState<ReactionTemplate[]>([])
   const [reactionTemplateId, setReactionTemplateId] = useState<ReactionTemplate['template_id']>('oer-aem-che')
   const [reactionBindings, setReactionBindings] = useState<Record<string, string>>({})
+  const [reactionOutputImports, setReactionOutputImports] = useState<Record<string, ReactionOutputImport>>({})
   const [reactionEnergies, setReactionEnergies] = useState<Record<string, string>>({
     slab: '-100.000',
     h_star: '-103.450',
@@ -410,6 +445,8 @@ function App() {
   const potcarMetadataInputRef = useRef<HTMLInputElement>(null)
   const slurmInputRef = useRef<HTMLInputElement>(null)
   const hpcProfileInputRef = useRef<HTMLInputElement>(null)
+  const reactionOutputInputRef = useRef<HTMLInputElement>(null)
+  const reactionUploadTargetRef = useRef<string | null>(null)
   const languageMenuRef = useRef<HTMLDivElement>(null)
   const currentProjectId = currentProject?.project_id ?? null
 
@@ -454,7 +491,10 @@ function App() {
           const raw = localStorage.getItem(STORAGE_KEY)
           if (raw) {
             const saved = JSON.parse(raw) as SavedWorkflow
-            if (saved.schema_version === 'catex.web-local-workflow.v1') {
+            if (
+              saved.schema_version === 'catex.web-local-workflow.v1' &&
+              !hasLegacyStructureWorkflowNodes(saved.nodes)
+            ) {
               nextNodes = rehydrateNodes(saved.nodes, definitions)
               nextEdges = saved.edges
             }
@@ -510,6 +550,24 @@ function App() {
   }, [bootstrapKey, loadTemplate, tr])
 
   useEffect(() => {
+    if (!capabilities || capabilities.chgnet) return
+    let cancelled = false
+    const timer = window.setInterval(() => {
+      void api.capabilities()
+        .then((payload) => {
+          if (!cancelled && payload.chgnet) setCapabilities(payload)
+        })
+        .catch(() => {
+          // The main API status already reports connectivity; keep this recovery probe quiet.
+        })
+    }, 3000)
+    return () => {
+      cancelled = true
+      window.clearInterval(timer)
+    }
+  }, [capabilities])
+
+  useEffect(() => {
     if (!currentProjectId || !templateResponse || registry.size === 0) return
     let cancelled = false
     Promise.all([
@@ -542,7 +600,12 @@ function App() {
           setStructureReady(false)
         }
         const savedTypeIds = new Set(savedWorkflow?.nodes.map((node) => node.type_id) ?? [])
-        if (savedWorkflow && savedTypeIds.has('hpc.connect') && savedTypeIds.has('slurm.submit')) {
+        if (
+          savedWorkflow &&
+          savedTypeIds.has('hpc.connect') &&
+          savedTypeIds.has('slurm.submit') &&
+          !hasLegacyStructureWorkflowNodes(savedWorkflow.nodes)
+        ) {
           loadTemplate(
             {
               ...templateResponse,
@@ -604,6 +667,8 @@ function App() {
         setCalculationPlan(null)
         setMaterialization(null)
         setLocalPotcarReceipt(null)
+        setChgnetResult(null)
+        setChgnetConfirmed(false)
         setRuns(projectRuns)
         setSelectedRunId((current) =>
           projectRuns.some((run) => run.run_id === current)
@@ -616,6 +681,9 @@ function App() {
         setRemoteResult(null)
         setReviewedEnergies(projectEnergies)
         setCalculationResults(projectResults)
+        setReactionBindings({})
+        setReactionOutputImports({})
+        setReactionAnalysis(null)
         setEnergyDerivation(null)
       })
       .catch((error: unknown) => {
@@ -1104,6 +1172,7 @@ function App() {
         }
         setStructure(payload)
         setPoscarSource(await structureFile.text())
+        setChgnetResult(null)
         setWorkFileSources((current) => ({ ...current, poscar: current.poscar || structureFile.name }))
         setStructureReady(payload.inspection.status !== 'error')
         setResult(null)
@@ -1301,6 +1370,104 @@ function App() {
       setNotice({ tone: 'error', message: error instanceof Error ? error.message : tr('原子固定设置失败。', 'Failed to apply atom constraints.') })
     }
   }, [bottomLayerCount, constraintPreview.error, constraintStrategy, inspectFile, layerTolerance, mobileAtomText, poscarSource, selectiveDynamicsEnabled, tr, workDirectory])
+
+  const runChgnetPreRelaxation = useCallback(async () => {
+    if (!chgnetEnabled) {
+      setNotice({ tone: 'warning', message: tr('请先启用 CHGNet 预弛豫。', 'Enable CHGNet pre-relaxation first.') })
+      return
+    }
+    if (!currentProject || !latestStructureArtifact || !poscarSource) {
+      setNotice({ tone: 'error', message: tr('请先创建项目并导入有效的 POSCAR。', 'Create a project and import a valid POSCAR first.') })
+      return
+    }
+    if (!capabilities?.chgnet) {
+      setNotice({
+        tone: 'error',
+        message: capabilities
+          ? tr(
+              '当前运行的是旧版 CatEx API。请关闭旧启动窗口并重新启动工作台；页面会自动重新探测。',
+              'An older CatEx API is still running. Close the old launcher and restart the workbench; this page will detect it automatically.',
+            )
+          : tr('本地运行环境仍在探测，请稍后重试。', 'The local runtime is still being detected; try again shortly.'),
+      })
+      return
+    }
+    if (!capabilities.chgnet.available) {
+      setNotice({
+        tone: 'error',
+        message: tr(
+          `本机 CHGNet 运行环境不完整：${capabilities.chgnet.missing_packages.join('、') || '未知依赖'}。`,
+          `The local CHGNet runtime is incomplete: ${capabilities.chgnet.missing_packages.join(', ') || 'unknown dependency'}.`,
+        ),
+      })
+      return
+    }
+    if (!chgnetConfirmed) {
+      setNotice({ tone: 'warning', message: tr('请先确认 CHGNet 只用于预弛豫。', 'Confirm that CHGNet is used only for pre-relaxation.') })
+      return
+    }
+    setBusy('chgnet')
+    try {
+      const response = await api.runChgnetPreRelaxation(
+        currentProject.project_id,
+        latestStructureArtifact.artifact_id,
+        {
+          model_name: chgnetModel,
+          optimizer: chgnetOptimizer,
+          fmax_eV_per_angstrom: chgnetFmax,
+          max_steps: chgnetMaxSteps,
+          relax_cell: chgnetRelaxCell,
+          device: chgnetDevice,
+        },
+      )
+      if (workDirectory) {
+        await writeWorkspaceFile(workDirectory, 'POSCAR_CHGNET.vasp', response.poscar_text)
+        await writeWorkspaceFile(workDirectory, 'POSCAR', response.poscar_text)
+      }
+      const artifact = response.output_artifact
+      const inspection = projectArtifactInspection(artifact)
+      setArtifacts((current) => [artifact, ...current.filter((item) => item.artifact_id !== artifact.artifact_id)])
+      setActiveStructureArtifactId(artifact.artifact_id)
+      localStorage.setItem(
+        `${ACTIVE_STRUCTURE_STORAGE_PREFIX}${currentProject.project_id}`,
+        artifact.artifact_id,
+      )
+      setStructure(inspection)
+      setPoscarSource(response.poscar_text)
+      setStructureReady(inspection.inspection.status !== 'error')
+      setWorkFileSources((current) => ({
+        ...current,
+        poscar: workDirectory ? 'POSCAR_CHGNET.vasp → POSCAR' : 'CHGNet project artifact',
+      }))
+      setCalculationPlan(null)
+      setMaterialization(null)
+      setChgnetResult(response)
+      const refreshed = await api.projects()
+      setProjects(refreshed)
+      setCurrentProject(
+        refreshed.find((item) => item.project_id === currentProject.project_id) ?? currentProject,
+      )
+      setNotice({
+        tone: response.summary.converged ? 'success' : 'warning',
+        message: response.summary.converged
+          ? tr(
+              `CHGNet 已在 ${response.summary.n_steps} 步达到 ${response.summary.final_fmax_eV_per_angstrom.toFixed(4)} eV/Å；新结构已设为当前 POSCAR。`,
+              `CHGNet reached ${response.summary.final_fmax_eV_per_angstrom.toFixed(4)} eV/Å in ${response.summary.n_steps} steps; the new structure is now the active POSCAR.`,
+            )
+          : tr(
+              `CHGNet 未达到目标力阈值（最终 ${response.summary.final_fmax_eV_per_angstrom.toFixed(4)} eV/Å），但预处理结构已保留并设为当前 POSCAR；请依靠后续 VASP 完成收敛。`,
+              `CHGNet did not reach the force target (final ${response.summary.final_fmax_eV_per_angstrom.toFixed(4)} eV/Å), but the preconditioned structure was retained and set as the active POSCAR; rely on VASP for final convergence.`,
+            ),
+      })
+    } catch (error) {
+      setNotice({
+        tone: 'error',
+        message: error instanceof Error ? error.message : tr('CHGNet 预弛豫失败。', 'CHGNet pre-relaxation failed.'),
+      })
+    } finally {
+      setBusy(null)
+    }
+  }, [capabilities?.chgnet, chgnetConfirmed, chgnetDevice, chgnetEnabled, chgnetFmax, chgnetMaxSteps, chgnetModel, chgnetOptimizer, chgnetRelaxCell, currentProject, latestStructureArtifact, poscarSource, tr, workDirectory])
 
   const handleConstraintAtomClick = useCallback((index1Based: number) => {
     setFocusedConstraintAtom(index1Based)
@@ -1500,13 +1667,107 @@ function App() {
   }, [result, thermoCutoff, thermoTemperature, tr])
 
   const bindReactionResult = useCallback((stateKey: string, runId: string) => {
-    setReactionBindings((current) => ({ ...current, [stateKey]: runId }))
+    setReactionOutputImports((current) => withoutRecordKey(current, stateKey))
+    setReactionBindings((current) => (
+      runId ? { ...current, [stateKey]: runId } : withoutRecordKey(current, stateKey)
+    ))
     const selected = calculationResults.find((item) => item.run_id === runId)
     if (selected?.energy_eV != null) {
       setReactionEnergies((current) => ({ ...current, [stateKey]: String(selected.energy_eV) }))
     }
     setReactionAnalysis(null)
   }, [calculationResults])
+
+  const updateReactionEnergy = useCallback((stateKey: string, value: string) => {
+    setReactionEnergies((current) => ({ ...current, [stateKey]: value }))
+    setReactionBindings((current) => withoutRecordKey(current, stateKey))
+    setReactionOutputImports((current) => withoutRecordKey(current, stateKey))
+    setReactionAnalysis(null)
+  }, [])
+
+  const chooseReactionOutputFiles = useCallback((stateKey: string) => {
+    reactionUploadTargetRef.current = stateKey
+    reactionOutputInputRef.current?.click()
+  }, [])
+
+  const importReactionOutputFiles = useCallback(async (stateKey: string, files: File[]) => {
+    if (!files.length) return
+    setBusy(`reaction-output:${stateKey}`)
+    try {
+      const parsed = await api.parseVaspOutputFiles(files)
+      const candidates: Array<{
+        kind: ReactionOutputImport['energyKind']
+        value: number | null | undefined
+      }> = [
+        { kind: 'sigma_zero', value: parsed.energy?.sigma_zero_energy_eV },
+        { kind: 'without_entropy', value: parsed.energy?.energy_without_entropy_eV },
+        { kind: 'free_energy', value: parsed.energy?.free_energy_eV },
+      ]
+      const selected = candidates.find((item) => item.value != null && Number.isFinite(item.value))
+      if (!selected || selected.value == null) {
+        throw new Error(tr(
+          '所选 OUTCAR/OSZICAR 中没有可用的最终能量。',
+          'No usable final energy was found in the selected OUTCAR/OSZICAR.',
+        ))
+      }
+      const imported: ReactionOutputImport = {
+        filenames: parsed.upload?.filenames ?? files.map((file) => file.name),
+        energyKind: selected.kind,
+        energyEv: selected.value,
+        status: parsed.status,
+        scientificallyComplete: parsed.scientifically_complete,
+        ionicConvergence: parsed.convergence.ionic,
+      }
+      setReactionOutputImports((current) => ({ ...current, [stateKey]: imported }))
+      setReactionBindings((current) => withoutRecordKey(current, stateKey))
+      setReactionEnergies((current) => ({ ...current, [stateKey]: String(selected.value) }))
+      setReactionAnalysis(null)
+      setNotice({
+        tone: parsed.scientifically_complete ? 'success' : 'warning',
+        message: tr(
+          `已从 ${imported.filenames.join(' + ')} 读取 ${selected.kind} 能量 ${selected.value.toFixed(6)} eV。`,
+          `Read ${selected.kind} energy ${selected.value.toFixed(6)} eV from ${imported.filenames.join(' + ')}.`,
+        ),
+      })
+    } catch (error) {
+      setNotice({
+        tone: 'error',
+        message: error instanceof Error
+          ? error.message
+          : tr('VASP 结果文件读取失败。', 'Failed to read VASP output files.'),
+      })
+    } finally {
+      setBusy(null)
+    }
+  }, [tr])
+
+  const refreshReactionResults = useCallback(async () => {
+    if (!currentProject) {
+      setNotice({ tone: 'warning', message: tr('请先打开一个项目。', 'Open a project first.') })
+      return
+    }
+    setBusy('reaction-results-refresh')
+    try {
+      const refreshed = await api.calculationResults(currentProject.project_id)
+      setCalculationResults(refreshed)
+      setNotice({
+        tone: 'success',
+        message: tr(
+          `已刷新项目计算结果，共 ${refreshed.length} 条。`,
+          `Refreshed ${refreshed.length} project calculation result(s).`,
+        ),
+      })
+    } catch (error) {
+      setNotice({
+        tone: 'error',
+        message: error instanceof Error
+          ? error.message
+          : tr('项目计算结果刷新失败。', 'Failed to refresh project calculation results.'),
+      })
+    } finally {
+      setBusy(null)
+    }
+  }, [currentProject, tr])
 
   const calculateReactionAnalysis = useCallback(async () => {
     if (!activeReactionTemplate) return
@@ -1648,6 +1909,8 @@ function App() {
     loadTemplate(templateResponse, registry, false)
     setStructure(null)
     setPoscarSource('')
+    setChgnetResult(null)
+    setChgnetConfirmed(false)
     setImportedInputNames({ incar: '', kpoints: '', potcar: '' })
     setResult(null)
     setStructureReady(false)
@@ -2581,6 +2844,153 @@ function App() {
                 </div>
               )}
             </section>
+            <section className={`chgnet-prerelax-panel ${chgnetEnabled ? 'enabled' : ''}`}>
+              <div className="card-heading">
+                <div>
+                  <span className="eyebrow">OPTIONAL MLIP → VASP</span>
+                  <h4>{tr('CHGNet 结构预弛豫', 'CHGNet structure pre-relaxation')}</h4>
+                </div>
+                <label className="constraint-enable-toggle">
+                  <input
+                    checked={chgnetEnabled}
+                    onChange={(event) => setChgnetEnabled(event.target.checked)}
+                    type="checkbox"
+                  />
+                  <span>{tr('启用可选预弛豫', 'Enable optional pre-relaxation')}</span>
+                </label>
+              </div>
+              {!chgnetEnabled ? (
+                <p className="constraint-disabled-note">{tr(
+                  '默认关闭。启用后可在本机用 CHGNet 快速整理初始几何，再把新结构交给 VASP 正式优化。',
+                  'Off by default. Enable it to precondition the initial geometry locally with CHGNet before the formal VASP optimization.',
+                )}</p>
+              ) : (
+                <div className="chgnet-prerelax-body">
+                  <div className={`chgnet-runtime ${capabilities?.chgnet?.available ? 'ready' : capabilities && !capabilities.chgnet ? 'stale' : 'missing'}`}>
+                    {capabilities?.chgnet?.available ? <Check size={15} /> : <AlertTriangle size={15} />}
+                    <span>
+                      <strong>{capabilities?.chgnet?.available
+                        ? tr('本机运行环境已就绪', 'Local runtime ready')
+                        : !capabilities
+                          ? tr('正在探测本机环境', 'Detecting local runtime')
+                          : !capabilities.chgnet
+                            ? tr('当前后端需要重启', 'Backend restart required')
+                            : tr('本机运行环境不完整', 'Local runtime incomplete')}</strong>
+                      <small>{capabilities?.chgnet?.available
+                        ? `CHGNet ${capabilities.chgnet.packages.chgnet?.version ?? '—'} · torch ${capabilities.chgnet.packages.torch?.version ?? '—'} · ${tr('不连接超算', 'no HPC contact')}`
+                        : !capabilities
+                          ? tr('正在联系本地 CatEx API…', 'Contacting the local CatEx API…')
+                          : !capabilities.chgnet
+                            ? tr(
+                                '检测到启动本功能之前的旧 API 进程；请关闭旧启动窗口并重新双击启动器。',
+                                'An API process from before this feature was installed is still running; close the old launcher and start CatEx again.',
+                              )
+                            : tr(
+                                `缺少：${capabilities.chgnet.missing_packages.join('、') || '未知依赖'}`,
+                                `Missing: ${capabilities.chgnet.missing_packages.join(', ') || 'unknown dependency'}`,
+                              )}</small>
+                    </span>
+                    {capabilities && !capabilities.chgnet && (
+                      <button className="secondary-button" onClick={() => setBootstrapKey((value) => value + 1)} type="button">
+                        <RefreshCw size={14} /> {tr('重新探测', 'Detect again')}
+                      </button>
+                    )}
+                  </div>
+                  <p>{tr(
+                    'CatEx 会读取当前 POSCAR；若其中已有 F F F / T T T 标记，CHGNet 会保持固定原子不动。原始结构继续保留，输出作为新的项目结构记录。',
+                    'CatEx reads the active POSCAR and honors F F F / T T T flags. The source structure is retained and the output becomes a new project structure record.',
+                  )}</p>
+                  <div className="chgnet-config-grid">
+                    <label>{tr('预训练模型', 'Pretrained model')}
+                      <select onChange={(event) => setChgnetModel(event.target.value as ChgnetPreRelaxationConfig['model_name'])} value={chgnetModel}>
+                        <option value="0.3.0">0.3.0 · MPtrj / GGA(+U)</option>
+                        <option value="r2scan">r2scan · MP-r2SCAN</option>
+                      </select>
+                    </label>
+                    <label>{tr('优化器', 'Optimizer')}
+                      <select onChange={(event) => setChgnetOptimizer(event.target.value as ChgnetPreRelaxationConfig['optimizer'])} value={chgnetOptimizer}>
+                        <option value="FIRE">FIRE</option>
+                        <option value="BFGS">BFGS</option>
+                        <option value="LBFGS">LBFGS</option>
+                      </select>
+                    </label>
+                    <label>{tr('目标最大力 (eV/Å)', 'Target max force (eV/Å)')}
+                      <input max={1} min={0.005} onChange={(event) => setChgnetFmax(Number(event.target.value))} step={0.005} type="number" value={chgnetFmax} />
+                    </label>
+                    <label>{tr('最大优化步数', 'Maximum steps')}
+                      <input max={5000} min={1} onChange={(event) => setChgnetMaxSteps(Number(event.target.value))} step={10} type="number" value={chgnetMaxSteps} />
+                    </label>
+                    <label>{tr('计算设备', 'Compute device')}
+                      <select onChange={(event) => setChgnetDevice(event.target.value as ChgnetPreRelaxationConfig['device'])} value={chgnetDevice}>
+                        <option value="auto">{tr('自动选择', 'Auto select')}</option>
+                        <option value="cpu">CPU</option>
+                        {capabilities?.chgnet?.cuda_available && <option value="cuda">CUDA GPU</option>}
+                      </select>
+                    </label>
+                    <label className="chgnet-cell-toggle">
+                      <input checked={chgnetRelaxCell} onChange={(event) => setChgnetRelaxCell(event.target.checked)} type="checkbox" />
+                      <span><strong>{tr('同时优化晶胞', 'Relax the cell')}</strong><small>{tr('表面/真空模型建议关闭', 'Keep off for slabs/vacuum')}</small></span>
+                    </label>
+                  </div>
+                  {chgnetRelaxCell && (
+                    <div className="inline-warning"><AlertTriangle size={15} /> {tr(
+                      '优化晶胞可能改变表面横向晶格和真空层；若 POSCAR 含固定原子，受控模式会拒绝该组合。',
+                      'Cell relaxation can alter lateral lattice vectors and vacuum; bounded mode rejects it when fixed atoms are present.',
+                    )}</div>
+                  )}
+                  <label className="confirmation-row chgnet-confirmation">
+                    <input checked={chgnetConfirmed} onChange={(event) => setChgnetConfirmed(event.target.checked)} type="checkbox" />
+                    {tr(
+                      '我理解 CHGNet 只生成 VASP 初始结构，能量和收敛结论不能替代最终 DFT。',
+                      'I understand that CHGNet only prepares the VASP starting structure; its energy and convergence do not replace final DFT.',
+                    )}
+                  </label>
+                  <button
+                    className="primary-button chgnet-run-button"
+                    disabled={!capabilities?.chgnet?.available || !chgnetConfirmed || !latestStructureArtifact || busy !== null}
+                    onClick={() => void runChgnetPreRelaxation()}
+                    type="button"
+                  >
+                    {busy === 'chgnet' ? <LoaderCircle className="spin" size={16} /> : <Sparkles size={16} />}
+                    {busy === 'chgnet'
+                      ? tr('正在本机预弛豫…', 'Pre-relaxing locally…')
+                      : tr('运行并采用预弛豫结构', 'Run and use pre-relaxed structure')}
+                  </button>
+                  {chgnetResult && (
+                    <div className={`chgnet-result ${chgnetResult.summary.converged ? 'converged' : 'unconverged'}`}>
+                      <div className="chgnet-result-heading">
+                        <span>{chgnetResult.summary.converged ? <Check size={17} /> : <AlertTriangle size={17} />}</span>
+                        <strong>{chgnetResult.summary.converged
+                          ? tr('预弛豫达到目标力阈值', 'Pre-relaxation reached the force target')
+                          : tr('预弛豫未达到目标力阈值', 'Pre-relaxation did not reach the force target')}</strong>
+                        <small>{chgnetResult.relaxation_id}</small>
+                      </div>
+                      <dl>
+                        <div><dt>{tr('优化步数', 'Steps')}</dt><dd>{chgnetResult.summary.n_steps}</dd></div>
+                        <div><dt>Fmax</dt><dd>{chgnetResult.summary.final_fmax_eV_per_angstrom.toFixed(4)} eV/Å</dd></div>
+                        <div><dt>ΔE (MLIP)</dt><dd>{chgnetResult.summary.energy_change_eV.toFixed(4)} eV</dd></div>
+                        <div><dt>{tr('最大位移', 'Max displacement')}</dt><dd>{chgnetResult.summary.maximum_displacement_angstrom.toFixed(3)} Å</dd></div>
+                        <div><dt>{tr('固定 / 放开', 'Fixed / mobile')}</dt><dd>{chgnetResult.summary.fixed_atom_count} / {chgnetResult.summary.mobile_atom_count}</dd></div>
+                        <div><dt>{tr('设备', 'Device')}</dt><dd>{chgnetResult.summary.device}</dd></div>
+                      </dl>
+                      <small>{workDirectory
+                        ? tr(
+                            '已保存为新的项目结构；本地工作文件夹同时写入 POSCAR_CHGNET.vasp 和当前 POSCAR。',
+                            'Saved as a new project structure; POSCAR_CHGNET.vasp and the active POSCAR were also written to the local work folder.',
+                          )
+                        : tr(
+                            '已保存为新的项目结构；尚未选择本地工作文件夹，因此没有写入本机 POSCAR。',
+                            'Saved as a new project structure; no local POSCAR was written because no work folder is selected.',
+                          )}</small>
+                    </div>
+                  )}
+                  <div className="inline-warning chgnet-domain-warning"><Info size={15} /> {tr(
+                    '通用势对表面、吸附物、缺陷和特殊电荷态可能超出训练域；请检查几何并始终用 VASP 重新优化。',
+                    'A universal potential may be out of domain for surfaces, adsorbates, defects, and unusual charge states; inspect the geometry and always re-optimize with VASP.',
+                  )}</div>
+                </div>
+              )}
+            </section>
             <details className="input-preview-details">
               <summary>{tr('查看 POSCAR 文本', 'View POSCAR text')}</summary>
               <pre aria-label="POSCAR preview" className="input-preview">{poscarSource || tr('请先上传结构。', 'Upload a structure first.')}</pre>
@@ -3169,16 +3579,73 @@ function App() {
       </div>
       <div className="analysis-layout">
         <article className="analysis-form-card">
+          <input
+            hidden
+            multiple
+            onChange={(event) => {
+              const target = reactionUploadTargetRef.current
+              const files = Array.from(event.target.files ?? [])
+              if (target && files.length) void importReactionOutputFiles(target, files)
+              event.target.value = ''
+            }}
+            ref={reactionOutputInputRef}
+            type="file"
+          />
           <label>{tr('反应模板', 'Reaction template')}<select onChange={(event) => { setReactionTemplateId(event.target.value as ReactionTemplate['template_id']); setReactionAnalysis(null) }} value={reactionTemplateId}>{reactionTemplates.map((template) => <option key={template.template_id} value={template.template_id}>{template.template_id === 'her-che' ? 'HER · CHE' : 'OER · AEM/CHE'}</option>)}</select></label>
+          <div className="reaction-source-toolbar">
+            <div>
+              <strong>{tr('计算结果能量', 'Calculation-result energies')}</strong>
+              <span>{tr(
+                `当前项目可绑定 ${calculationResults.length} 条结果；也可给每个状态上传 OUTCAR/OSZICAR。`,
+                `${calculationResults.length} project result(s) can be bound; OUTCAR/OSZICAR can also be uploaded per state.`,
+              )}</span>
+            </div>
+            <button className="secondary-button" disabled={busy !== null || !currentProject} onClick={() => void refreshReactionResults()} type="button">
+              {busy === 'reaction-results-refresh' ? <LoaderCircle className="spin" size={14} /> : <RefreshCw size={14} />}
+              {tr('刷新项目结果', 'Refresh project results')}
+            </button>
+          </div>
           <div className="state-binding-list">
-            {activeReactionTemplate?.state_keys.map((key) => (
-              <section className="state-binding-row" key={key}>
-                <strong>{key.replace('_star', '*')}</strong>
-                <label>{tr('绑定计算结果', 'Bind result')}<select onChange={(event) => bindReactionResult(key, event.target.value)} value={reactionBindings[key] ?? ''}><option value="">{tr('手动输入', 'Manual value')}</option>{calculationResults.map((item) => <option disabled={item.energy_eV == null} key={item.run_id} value={item.run_id}>{item.run_id} · {formatNumber(item.energy_eV, 4)} eV</option>)}</select></label>
-                <label>E<sub>DFT</sub> (eV)<input onChange={(event) => { setReactionEnergies((current) => ({ ...current, [key]: event.target.value })); setReactionAnalysis(null) }} type="number" value={reactionEnergies[key] ?? ''} /></label>
-                <label>G<sub>corr</sub> (eV)<input onChange={(event) => { setReactionCorrections((current) => ({ ...current, [key]: event.target.value })); setReactionAnalysis(null) }} placeholder="0.000" type="number" value={reactionCorrections[key] ?? ''} /></label>
-              </section>
-            ))}
+            {activeReactionTemplate?.state_keys.map((key) => {
+              const uploaded = reactionOutputImports[key]
+              const sourceValue = uploaded ? '__uploaded__' : reactionBindings[key] ?? ''
+              return (
+                <section className="state-binding-row" key={key}>
+                  <strong>{key.replace('_star', '*')}</strong>
+                  <div className="reaction-source-control">
+                    <label>{tr('能量来源', 'Energy source')}
+                      <select
+                        onChange={(event) => {
+                          if (event.target.value !== '__uploaded__') bindReactionResult(key, event.target.value)
+                        }}
+                        value={sourceValue}
+                      >
+                        <option value="">{tr('手动输入', 'Manual value')}</option>
+                        {uploaded && <option value="__uploaded__">{tr('已上传 VASP 结果', 'Uploaded VASP output')}</option>}
+                        {calculationResults.map((item) => <option disabled={item.energy_eV == null} key={item.run_id} value={item.run_id}>{item.run_id} · {formatNumber(item.energy_eV, 4)} eV</option>)}
+                      </select>
+                    </label>
+                    <button className="result-file-button" disabled={busy !== null} onClick={() => chooseReactionOutputFiles(key)} type="button">
+                      {busy === `reaction-output:${key}` ? <LoaderCircle className="spin" size={14} /> : <FileUp size={14} />}
+                      {tr('读取结果文件', 'Read output files')}
+                    </button>
+                  </div>
+                  <label>E<sub>DFT</sub> (eV)<input onChange={(event) => updateReactionEnergy(key, event.target.value)} type="number" value={reactionEnergies[key] ?? ''} /></label>
+                  <label>G<sub>corr</sub> (eV)<input onChange={(event) => { setReactionCorrections((current) => ({ ...current, [key]: event.target.value })); setReactionAnalysis(null) }} placeholder="0.000" type="number" value={reactionCorrections[key] ?? ''} /></label>
+                  {uploaded && (
+                    <div className={`reaction-import-summary ${uploaded.scientificallyComplete ? 'complete' : 'incomplete'}`}>
+                      <FileCheck2 size={14} />
+                      <span>{uploaded.filenames.join(' + ')} · {uploaded.energyKind} · {uploaded.energyEv.toFixed(6)} eV · {uploaded.status} / {uploaded.ionicConvergence}</span>
+                    </div>
+                  )}
+                </section>
+              )
+            })}
+            <section className="terminal-slab-row">
+              <strong>slab</strong>
+              <span>{tr('再生后的催化表面；由反应模板和 H₂/H₂O 参考态自动闭合，无需重复上传。', 'Regenerated catalyst surface; closed automatically from the reaction template and H₂/H₂O reservoirs—no duplicate upload is required.')}</span>
+              <span className="success-chip">{tr('模板自动闭合', 'Template-closed')}</span>
+            </section>
           </div>
           <div className="reservoir-grid">
             <label>G(H₂) (eV)<input onChange={(event) => setH2Energy(event.target.value)} type="number" value={h2Energy} /></label>
@@ -3189,11 +3656,11 @@ function App() {
             <label>{tr('电极标尺', 'Potential scale')}<select onChange={(event) => setReferenceElectrode(event.target.value as 'RHE' | 'SHE')} value={referenceElectrode}><option value="RHE">RHE</option><option value="SHE">SHE</option></select></label>
           </div>
           <button className="primary-button" disabled={!activeReactionTemplate || busy !== null} onClick={() => void calculateReactionAnalysis()} type="button"><ChartNoAxesCombined size={16} /> {tr('计算并绘制台阶图', 'Calculate and plot')}</button>
-          <small>{tr('绑定结果时自动检查 energy family；外部 H₂/H₂O 参考能和热化学校正始终显式显示。', 'Bound results are checked for a shared energy family; external H₂/H₂O references and corrections remain explicit.')}</small>
+          <small>{tr('绑定项目结果时自动检查 energy family；上传外部结果时无法自动确认计算协议是否一致，请确保泛函、POTCAR、ENCUT 和 KPOINTS 可比。外部 H₂/H₂O 参考能与热化学校正始终显式显示。', 'Project-bound results are checked for a shared energy family. For external uploads, protocol compatibility cannot be inferred automatically; ensure functional, POTCAR, ENCUT, and KPOINTS are comparable. H₂/H₂O references and thermochemical corrections remain explicit.')}</small>
         </article>
         <article className="diagram-card">
           <div className="card-heading"><div><span className="eyebrow">FREE-ENERGY LANDSCAPE</span><h3>{reactionTemplateId === 'her-che' ? 'HER' : 'OER'} · {referenceElectrode}</h3></div>{reactionAnalysis && <span className="model-badge">U = {reactionAnalysis.conditions.potential_volts.toFixed(2)} V · pH {reactionAnalysis.conditions.pH}</span>}</div>
-          <FreeEnergyDiagram analysis={reactionAnalysis} emptyLabel={tr('填入或绑定各状态能量，然后生成台阶图。', 'Enter or bind state energies, then generate the diagram.')} />
+          <FreeEnergyDiagram analysis={reactionAnalysis} emptyLabel={tr('绑定项目结果或上传各状态的 OUTCAR/OSZICAR，然后生成台阶图。', 'Bind project results or upload OUTCAR/OSZICAR for each state, then generate the diagram.')} />
           {reactionAnalysis && <div className="analysis-metrics"><div><span>{tr('势限制步骤', 'Potential-limiting step')}</span><strong>{reactionAnalysis.potential_limiting_step}</strong></div><div><span>{reactionTemplateId === 'her-che' ? '|ΔG(H*)|' : tr('限制电位', 'Limiting potential')}</span><strong>{formatNumber(reactionAnalysis.descriptor_eV ?? reactionAnalysis.limiting_potential_volts, 3)} {reactionTemplateId === 'her-che' ? 'eV' : 'V'}</strong></div><div><span>{tr('过电位', 'Overpotential')}</span><strong>{formatNumber(reactionAnalysis.overpotential_volts, 3)} V</strong></div></div>}
           {reactionAnalysis && <div className="step-table">{reactionAnalysis.step_free_energies_eV.map((step, index) => <div className={reactionAnalysis.potential_limiting_step === index + 1 ? 'limiting' : ''} key={index}><span>Step {index + 1}</span><strong>{formatNumber(step, 3)} eV</strong></div>)}</div>}
         </article>

@@ -40,7 +40,7 @@ flowchart LR
 | --- | --- |
 | 项目 | 项目元数据、Artifact、SHA-256、来源与派生关系 |
 | 结构 | POSCAR/CONTCAR/CIF 导入、CIF→POSCAR、球棍模型、几何诊断 |
-| 约束 | 通过 Selective Dynamics 固定基底层或仅放开指定吸附物原子，并在应用前高亮预览 |
+| 约束与预弛豫 | 通过 Selective Dynamics 固定基底层或仅放开指定吸附物原子；可选用本机 CHGNet/FIRE 预弛豫，再交给 VASP 正式优化 |
 | VASP 输入 | 工作文件夹自动读取、逐文件替换、INCAR 表格编辑、KPOINTS 配置与一致性检查 |
 | POTCAR | 按 POSCAR 元素顺序验证脱敏元数据，在授权远端目录中受控生成并保存本地副本 |
 | Slurm | 结构化资源配置、最长时间与站点上限校验、唯一运行目录、单次提交和只读观察 |
@@ -78,6 +78,9 @@ python -m venv .venv
 .\.venv\Scripts\python.exe -m pip install --upgrade pip
 .\.venv\Scripts\python.exe -m pip install -e ".[web,dev]"
 
+# 可选：启用本机 CHGNet 结构预弛豫
+.\.venv\Scripts\python.exe -m pip install -e ".[mlip]"
+
 pnpm install --frozen-lockfile
 ```
 
@@ -104,13 +107,14 @@ pnpm web:poc
 1. 创建 CatEx 项目并选择一个本地工作文件夹。
 2. 导入 POSCAR、CONTCAR 或 CIF；检查结构、成键和警告。
 3. 如需弛豫约束，启用 Selective Dynamics 并预览固定/移动原子。
-4. 导入或编辑 INCAR、KPOINTS，核对元素顺序和计算协议。
-5. 在运行中心临时导入 SSH 配置，固定主机密钥，并执行只读连接测试。
-6. 填写远端项目名、允许的远端根目录、POTCAR 库位置和结构化 Slurm 参数。
-7. 读取并确认 POTCAR 元数据；需要时生成并保存本次 POTCAR。
-8. 点击“检查完整性并进入运行中心”，修复所有阻断项。
-9. 分别确认远端准备与作业提交，随后只读观察队列和运行状态。
-10. 在“计算结果”查看收敛结论、最终结构和数值结果；在“反应分析”绑定多个中间体并绘图。
+4. 可选启用 CHGNet 预弛豫；确认它只用于准备初始几何，再运行并检查生成的新 POSCAR。
+5. 导入或编辑 INCAR、KPOINTS，核对元素顺序和计算协议。
+6. 在运行中心临时导入 SSH 配置，固定主机密钥，并执行只读连接测试。
+7. 填写远端项目名、允许的远端根目录、POTCAR 库位置和结构化 Slurm 参数。
+8. 读取并确认 POTCAR 元数据；需要时生成并保存本次 POTCAR。
+9. 点击“检查完整性并进入运行中心”，修复所有阻断项。
+10. 分别确认远端准备与作业提交，随后只读观察队列和运行状态。
+11. 在“计算结果”查看收敛结论、最终结构和数值结果；在“反应分析”绑定多个中间体并绘图。
 
 完整操作说明见 [CatEx Workbench 使用指南](docs/WEB_POC.md)。
 
@@ -161,6 +165,7 @@ CI 在 Python 3.12、Node.js 24 和 pnpm 11.9 环境中执行格式检查、静�
 - 周期性非均相催化和电催化；
 - VASP 5.4.4 输入/输出与 Slurm 单作业生命周期；
 - 吸附构型、选择性弛豫、振动热化学、HER/OER 自由能分析；
+- 可选 CHGNet 通用机器学习势预弛豫（只用于 VASP 初始几何，不作为 DFT 结果）；
 - 文献复现、原创研究和实验解释共用的可追踪工作流。
 
 当前不承诺：
@@ -177,6 +182,7 @@ CI 在 Python 3.12、Node.js 24 和 pnpm 11.9 环境中执行格式检查、静�
 - [架构决策](docs/adr/0001-platform-architecture.md)
 - [Web Workbench 架构](docs/adr/0003-web-workbench-architecture.md)
 - [VASP 输入验证](docs/VASP_INPUT_VALIDATION.md)
+- [CHGNet 可选预弛豫](docs/CHGNET_PRE_RELAXATION.md)
 - [VASP 输出解析](docs/VASP_OUTPUT_PARSING.md)
 - [协议与 Slurm 规划](docs/PROTOCOL_AND_SLURM_DRY_RUN.md)
 - [POTCAR 脱敏元数据](docs/HPC_POTCAR_METADATA.md)

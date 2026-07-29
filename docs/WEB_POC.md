@@ -47,17 +47,19 @@ pnpm install --frozen-lockfile
    转换结果直接写为该文件夹中的 `POSCAR`。
 4. 如需约束结构，在“选择性弛豫”中选择“仅放开吸附物原子”并填写原子序号，或选择“固定底部
    若干原子层”。CatEx 写入 POSCAR 的 `Selective dynamics` 标记并重新检查结构。
-5. 在“运行中心”临时填写 SSH 资料、允许的远端项目根目录和远端 PAW-PBE 库目录，然后先执行
+5. 可选启用“CHGNet 结构预弛豫”，确认模型、力阈值和最大步数，并理解它只准备 VASP 初始结构。
+   CatEx 在本机运行，继承 `F F F` / `T T T` 约束，保留原始 Artifact，并把结果记为新的结构。
+6. 在“运行中心”临时填写 SSH 资料、允许的远端项目根目录和远端 PAW-PBE 库目录，然后先执行
    “只读测试连接”。连接资料只存在于当前页面内存，也可从本机 JSON 临时导入。
-6. 在“协议与输入”编辑或导入 INCAR、KPOINTS；在 POTCAR 卡片填写与 POSCAR 顺序一致的 label，
+7. 在“协议与输入”编辑或导入 INCAR、KPOINTS；在 POTCAR 卡片填写与 POSCAR 顺序一致的 label，
    从超算只读提取 TITEL、ENMAX、ZVAL 和 SHA-256 元数据。
-7. 为计算项目命名并配置结构化 Slurm 参数。导入已有 `run.slurm` 时只采纳 `#SBATCH` 资源、
+8. 为计算项目命名并配置结构化 Slurm 参数。导入已有 `run.slurm` 时只采纳 `#SBATCH` 资源、
    module 和 VASP 启动参数，不执行其中任意 shell、邮件或清理命令；脚本只进入远端运行目录，
    不复制到本地工作文件夹。
-8. 点击“检查输入并进入下一步”。CatEx 检查工作文件夹、POSCAR、INCAR、KPOINTS、POTCAR
+9. 点击“检查输入并进入下一步”。CatEx 检查工作文件夹、POSCAR、INCAR、KPOINTS、POTCAR
    metadata、超算连接和远端项目名；缺少必需项时会直接列出，完整后写回本地三类文本输入并进入
    运行中心。
-9. 明确确认后，在允许根目录下新建以项目名命名的唯一子目录，上传输入，上传并运行 CatEx
+10. 明确确认后，在允许根目录下新建以项目名命名的唯一子目录，上传输入，上传并运行 CatEx
    内置的独占式 POTCAR 构建器。构建器不覆盖、不删除文件，核对分数据集和合并文件哈希；成功后
    将同一份 POTCAR 复制到用户选择的本地工作文件夹。
 10. 再次明确确认后提交一次 `sbatch`。用只读 `squeue` / `sacct` 观察作业，终态后下载白名单
@@ -80,6 +82,9 @@ pnpm install --frozen-lockfile
 - POSCAR 卡片的“导入/替换”复用结构 Artifact 上传和自动检查流程。
 - CIF 通过 pymatgen 解析并转换；原始 CIF 保留，转换结果命名为 `POSCAR`。
 - 选择性弛豫不会猜测吸附物身份：用户必须显式给出可移动原子序号，或明确选择固定底层数。
+- CHGNet 默认关闭，只在用户点击后于本机运行，不建立 SSH 连接；固定晶胞是表面模型的默认值。
+- CHGNet 输出保存为新的 `POSCAR_CHGNET.vasp` Artifact。其能量和力收敛只描述机器学习势，不能与
+  VASP 能量混用，也不能替代后续 DFT 优化；详细边界见 [CHGNet 可选预弛豫](CHGNET_PRE_RELAXATION.md)。
 - INCAR 与自动网格 KPOINTS 可从文件导入并替换当前可视化表单；显式 KPOINTS 暂不自动改写。
 - INCAR 表格和 KPOINTS 表单修改结构化配置；点击进入下一步时才写回所选本地工作文件夹。
 - 保存配置后，后端按 VASP 5.4.4 规则、POTCAR 元数据、元素顺序和 ENCUT/ENMAX 关系校验输入。

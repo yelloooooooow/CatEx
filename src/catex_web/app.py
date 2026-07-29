@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import json
 import os
+import tempfile
 from pathlib import Path
 from typing import Annotated
 
@@ -12,10 +13,17 @@ from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel, ConfigDict, Field
 
 from catex import __version__
+from catex.mlip import (
+    ChgnetPreRelaxationConfig,
+    ChgnetPreRelaxationError,
+    ChgnetUnavailableError,
+)
 from catex.reactions.electrocatalysis import analyze_electrocatalysis, reaction_templates
+from catex.vasp import parse_vasp_output
 from catex.vasp.thermochemistry import harmonic_thermochemistry
 from catex_app.analysis import EnergyAnalysisService
 from catex_app.calculations import CalculationServiceError, CalculationWorkspaceService
+from catex_app.chgnet import ChgnetPreRelaxationService, ChgnetRunner
 from catex_app.hpc import HpcWorkspaceService
 from catex_app.hpc_gateway import (
     HpcConnectionProfile,
@@ -40,6 +48,25 @@ from catex_app.workflow import (
     node_registry_payload,
     validate_workflow,
 )
+
+MAX_VASP_OUTPUT_UPLOAD_BYTES = 512 * 1024 * 1024
+_VASP_OUTPUT_FILENAMES = {"OUTCAR", "OSZICAR"}
+
+
+def _scrub_temporary_output_paths(value: object) -> object:
+    """Replace ephemeral server paths with portable artifact filenames."""
+
+    if isinstance(value, list):
+        return [_scrub_temporary_output_paths(item) for item in value]
+    if isinstance(value, dict):
+        scrubbed: dict[str, object] = {}
+        for key, item in value.items():
+            if key in {"path", "artifact_path"} and isinstance(item, str):
+                scrubbed[key] = Path(item).name
+            else:
+                scrubbed[key] = _scrub_temporary_output_paths(item)
+        return scrubbed
+    return value
 
 
 class PositionRequest(BaseModel):
@@ -130,6 +157,21 @@ class SelectiveDynamicsRequest(BaseModel):
     mobile_indices_1based: list[int] = Field(default_factory=list, max_length=20000)
     bottom_layer_count: int = Field(default=1, ge=0, le=1000)
     layer_tolerance_angstrom: float = Field(default=0.5, ge=0.01, le=5.0)
+
+
+class ChgnetPreRelaxationRequest(ArtifactPlanRequest):
+    model_config = ConfigDict(extra="forbid")
+
+    model_name: str = Field(default="0.3.0", pattern=r"^(0\.3\.0|r2scan)$")
+    optimizer: str = Field(default="FIRE", pattern=r"^(FIRE|BFGS|LBFGS)$")
+    fmax_eV_per_angstrom: float = Field(default=0.05, ge=0.005, le=1.0)
+    max_steps: int = Field(default=500, ge=1, le=5000)
+    relax_cell: bool = False
+    device: str = Field(default="auto", pattern=r"^(auto|cpu|cuda)$")
+
+    def config(self) -> ChgnetPreRelaxationConfig:
+        payload = self.model_dump(exclude={"artifact_id"})
+        return ChgnetPreRelaxationConfig(**payload)
 
 
 class HpcProfileRequest(BaseModel):
@@ -263,10 +305,14 @@ def _persistent_root(explicit: str | Path | None) -> Path:
 
 
 def create_app(
-    *, data_root: str | Path | None = None, hpc_gateway: HpcGateway | None = None
+    *,
+    data_root: str | Path | None = None,
+    hpc_gateway: HpcGateway | None = None,
+    chgnet_runner: ChgnetRunner | None = None,
 ) -> FastAPI:
     store = ProjectStore(_persistent_root(data_root))
     calculations = CalculationWorkspaceService(store)
+    chgnet = ChgnetPreRelaxationService(store, chgnet_runner)
     hpc = HpcWorkspaceService(store, hpc_gateway or ParamikoHpcGateway())
     reference_cases = ReferenceCaseService(store, Path(__file__).resolve().parents[2])
     analysis = EnergyAnalysisService(store)
@@ -285,6 +331,7 @@ def create_app(
 
     @application.get("/api/v1/capabilities")
     def capabilities() -> dict[str, object]:
+        chgnet_status = chgnet.capabilities()
         return {
             "schema_version": "catex.web-capabilities.v1",
             "catex_version": __version__,
@@ -301,8 +348,14 @@ def create_app(
             "scientific_acceptance_enabled": False,
             "result_first_enabled": True,
             "reaction_analysis_enabled": True,
+            "mlip_pre_relaxation_enabled": bool(chgnet_status["available"]),
+            "chgnet": chgnet_status,
             "max_structure_upload_bytes": MAX_STRUCTURE_UPLOAD_BYTES,
         }
+
+    @application.get("/api/v1/chgnet/capabilities")
+    def chgnet_runtime_capabilities() -> dict[str, object]:
+        return chgnet.capabilities()
 
     @application.get("/api/v1/workflows/registry")
     def workflow_registry() -> dict[str, object]:
@@ -392,6 +445,21 @@ def create_app(
         try:
             return store.add_structure(project_id, file.filename or "", content)
         except (ProjectStoreError, UploadRejected) as error:
+            raise HTTPException(status_code=400, detail=str(error)) from error
+
+    @application.post(
+        "/api/v1/projects/{project_id}/chgnet-pre-relaxations",
+        status_code=201,
+    )
+    def pre_relax_project_structure(
+        project_id: str,
+        request: ChgnetPreRelaxationRequest,
+    ) -> dict[str, object]:
+        try:
+            return chgnet.relax(project_id, request.artifact_id, request.config())
+        except ChgnetUnavailableError as error:
+            raise HTTPException(status_code=503, detail=str(error)) from error
+        except (ProjectStoreError, ChgnetPreRelaxationError, OSError, ValueError) as error:
             raise HTTPException(status_code=400, detail=str(error)) from error
 
     @application.get("/api/v1/projects/{project_id}/structure-reviews/{artifact_id}")
@@ -730,6 +798,63 @@ def create_app(
             )
         except UploadRejected as error:
             raise HTTPException(status_code=400, detail=str(error)) from error
+
+    @application.post("/api/v1/vasp-output/parse")
+    async def parse_uploaded_vasp_output(
+        files: Annotated[
+            list[UploadFile],
+            File(description="One or both of OUTCAR and OSZICAR"),
+        ],
+    ) -> dict[str, object]:
+        """Parse user-selected VASP outputs ephemerally without retaining uploads."""
+
+        if not 1 <= len(files) <= 2:
+            raise HTTPException(status_code=400, detail="Upload one or both of OUTCAR and OSZICAR")
+        normalized: list[tuple[UploadFile, str]] = []
+        seen: set[str] = set()
+        for upload in files:
+            filename = upload.filename or ""
+            if filename != Path(filename).name or "\\" in filename:
+                raise HTTPException(
+                    status_code=400,
+                    detail="VASP output filenames must be basenames",
+                )
+            canonical = filename.upper()
+            if canonical not in _VASP_OUTPUT_FILENAMES:
+                raise HTTPException(
+                    status_code=400,
+                    detail="Only files named OUTCAR and OSZICAR are supported",
+                )
+            if canonical in seen:
+                raise HTTPException(status_code=400, detail=f"Duplicate uploaded file: {canonical}")
+            seen.add(canonical)
+            normalized.append((upload, canonical))
+
+        try:
+            with tempfile.TemporaryDirectory(prefix="catex-output-upload-") as temporary:
+                root = Path(temporary)
+                total_bytes = 0
+                for upload, canonical in normalized:
+                    with (root / canonical).open("xb") as destination:
+                        while chunk := await upload.read(1024 * 1024):
+                            total_bytes += len(chunk)
+                            if total_bytes > MAX_VASP_OUTPUT_UPLOAD_BYTES:
+                                raise HTTPException(
+                                    status_code=413,
+                                    detail="Combined VASP output upload exceeds the 512 MiB limit",
+                                )
+                            destination.write(chunk)
+                payload = parse_vasp_output(root).to_dict()
+                payload["directory"] = "browser-upload"
+                payload["upload"] = {
+                    "filenames": [canonical for _, canonical in normalized],
+                    "retained": False,
+                    "hpc_contacted": False,
+                }
+                return _scrub_temporary_output_paths(payload)  # type: ignore[return-value]
+        finally:
+            for upload, _ in normalized:
+                await upload.close()
 
     @application.post("/api/v1/thermochemistry/harmonic")
     def calculate_harmonic_thermochemistry(

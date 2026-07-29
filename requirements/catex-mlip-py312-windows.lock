@@ -1,0 +1,17 @@
+# CatEx optional CHGNet/MLIP environment snapshot
+# Platform: Windows x86_64
+# Python: 3.12.13
+# Generated: 2026-07-19
+# Install CatEx core first; this file records the additional tested MLIP resolution.
+# Direct install command: python -m pip install -e ".[mlip]"
+
+ase==3.29.0
+chgnet==0.4.2
+cython==3.2.8
+filelock==3.31.0
+fsspec==2026.6.0
+jinja2==3.1.6
+MarkupSafe==3.0.3
+nvidia-ml-py3==7.352.0
+setuptools==83.0.0
+torch==2.13.0

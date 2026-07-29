@@ -178,13 +178,12 @@ _NODE_DEFINITIONS = (
         "连接运行中心",
         "进入运行中心并只读验证 SSH、远端白名单和 POTCAR 构建器。",
         NodeCategory.EXECUTION,
-        inputs=(_port("structure", "结构记录", PortKind.STRUCTURE_RECORD),),
         outputs=(_port("context", "已连接计算上下文", PortKind.HPC_READY_CONTEXT),),
     ),
     NodeDefinition(
         "vasp.validate.auto",
         "VASP 输入诊断",
-        "根据结构检查和协议规则自动诊断输入; 错误会阻止计算, 警告会保留显示。",
+        "根据已导入的 VASP 输入和协议规则自动诊断; 错误会阻止计算, 警告会保留显示。",
         NodeCategory.PROTOCOL,
         inputs=(_port("context", "已连接计算上下文", PortKind.HPC_READY_CONTEXT),),
         outputs=(_port("validated", "已验证输入", PortKind.VALIDATED_INPUT),),
@@ -261,8 +260,6 @@ def default_workflow_template() -> WorkflowTemplate:
     """Return the deterministic, read-only POC workflow template."""
 
     node_types = (
-        "structure.upload",
-        "structure.inspect",
         "hpc.connect",
         "vasp.validate.auto",
         "slurm.plan",
@@ -280,8 +277,6 @@ def default_workflow_template() -> WorkflowTemplate:
         (600.0, 220.0),
         (300.0, 220.0),
         (0.0, 220.0),
-        (0.0, 440.0),
-        (300.0, 440.0),
     )
     nodes = tuple(
         WorkflowNode(
@@ -307,8 +302,8 @@ def default_workflow_template() -> WorkflowTemplate:
         )
     return WorkflowTemplate(
         template_id="structure-to-results",
-        title="结构到计算结果",
-        description="结构检查、VASP 输入诊断、运行、结果解析和自动汇总工作流。",
+        title="VASP 计算到结果",
+        description="运行中心连接、VASP 输入诊断、Slurm 运行、结果解析和自动汇总工作流。",
         nodes=nodes,
         edges=tuple(edges),
     )

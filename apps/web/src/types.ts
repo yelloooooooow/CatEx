@@ -76,6 +76,32 @@ export interface Capabilities {
   max_structure_upload_bytes: number
   result_first_enabled?: boolean
   reaction_analysis_enabled?: boolean
+  mlip_pre_relaxation_enabled?: boolean
+  chgnet?: ChgnetCapabilities
+}
+
+export interface ChgnetCapabilities {
+  schema_version: 'catex.chgnet-capabilities.v1'
+  available: boolean
+  packages: Record<string, { installed: boolean; version: string | null }>
+  missing_packages: string[]
+  models: string[]
+  optimizers: string[]
+  devices: string[]
+  cuda_available: boolean
+  defaults: ChgnetPreRelaxationConfig
+  execution_location: 'local'
+  contacts_hpc: false
+}
+
+export interface ChgnetPreRelaxationConfig {
+  schema_version?: 'catex.chgnet-pre-relaxation-config.v1'
+  model_name: '0.3.0' | 'r2scan'
+  optimizer: 'FIRE' | 'BFGS' | 'LBFGS'
+  fmax_eV_per_angstrom: number
+  max_steps: number
+  relax_cell: boolean
+  device: 'auto' | 'cpu' | 'cuda'
 }
 
 export interface StructureRecord {
@@ -178,6 +204,49 @@ export interface ProjectArtifactSource {
   sha256: string
   content: string
   read_only: true
+}
+
+export interface ChgnetPreRelaxationResponse {
+  schema_version: 'catex.web-chgnet-pre-relaxation.v1'
+  relaxation_id: string
+  project_id: string
+  recorded_at_utc: string
+  source_artifact_id: string
+  source_sha256: string
+  output_artifact_id: string
+  output_sha256: string
+  config: ChgnetPreRelaxationConfig
+  summary: {
+    schema_version: 'catex.chgnet-pre-relaxation-result.v1'
+    status: 'converged' | 'max_steps_or_optimizer_stop'
+    converged: boolean
+    n_steps: number
+    final_fmax_eV_per_angstrom: number
+    target_fmax_eV_per_angstrom: number
+    initial_energy_eV: number
+    final_energy_eV: number
+    energy_change_eV: number
+    maximum_displacement_angstrom: number
+    rms_displacement_angstrom: number
+    fixed_atom_count: number
+    mobile_atom_count: number
+    fixed_indices_1based: number[]
+    model_name: string
+    model_version: string
+    optimizer: string
+    device: string
+    relax_cell: boolean
+    elapsed_seconds: number
+    input_sha256?: string
+    output_sha256?: string
+    scientific_role: 'geometry_pre_relaxation_only'
+  }
+  warnings: string[]
+  hpc_contacted: false
+  vasp_executed: false
+  output_artifact: ProjectArtifact
+  poscar_text: string
+  retained: true
 }
 
 export interface StructureReview {
@@ -416,7 +485,7 @@ export interface VaspDemoResult {
   target_vasp_version: string
   detected_vasp_version: string | null
   energy: {
-    free_energy_eV: number
+    free_energy_eV: number | null
     energy_without_entropy_eV: number | null
     sigma_zero_energy_eV: number | null
   } | null
@@ -454,6 +523,11 @@ export interface VaspDemoResult {
   } | null
   vibrations: VibrationSummary | null
   diagnostics: Diagnostic[]
+  upload?: {
+    filenames: string[]
+    retained: false
+    hpc_contacted: false
+  }
   demo?: {
     synthetic: true
     scientific_result_eligible: false

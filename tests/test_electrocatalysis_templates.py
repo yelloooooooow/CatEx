@@ -38,6 +38,9 @@ def test_oer_template_builds_five_state_che_landscape() -> None:
     assert len(report.step_free_energies_ev) == 4
     assert report.energy_family_id == "family-1"
     assert report.states[-1].free_energy_ev == pytest.approx(0.0)
+    assert report.states[0].label == "slab"
+    assert report.states[-1].label == "slab"
+    assert report.states[-1].key == "slab_final"
     assert report.overpotential_volts is not None
 
 
@@ -50,4 +53,12 @@ def test_templates_declare_required_states_and_reservoirs() -> None:
         "oh_star",
         "o_star",
         "ooh_star",
+    ]
+    assert templates["her-che"]["state_labels"] == ["slab", "H*", "slab"]
+    assert templates["oer-aem-che"]["state_labels"] == [
+        "slab",
+        "OH*",
+        "O*",
+        "OOH*",
+        "slab",
     ]

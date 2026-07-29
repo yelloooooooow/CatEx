@@ -74,6 +74,8 @@ Reading-notes-code/
 **/slurm-*.out
 
 # Runtime workspaces
+/output/
+/.pytest-tmp-*/
 **/.material-studio-mcp/jobs/
 **/calculations/**
 **/logs/**
