@@ -10,6 +10,7 @@ from typing import Annotated
 
 from fastapi import FastAPI, File, HTTPException, Response, UploadFile
 from fastapi.middleware.cors import CORSMiddleware
+from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel, ConfigDict, Field
 
 from catex import __version__
@@ -19,10 +20,16 @@ from catex.mlip import (
     ChgnetUnavailableError,
 )
 from catex.reactions.electrocatalysis import analyze_electrocatalysis, reaction_templates
-from catex.vasp import parse_vasp_output
+from catex.vasp import (
+    SUPPORTED_RESULT_FILES,
+    VaspResultDocumentError,
+    build_vasp_result_document,
+    parse_vasp_output,
+)
 from catex.vasp.thermochemistry import harmonic_thermochemistry
 from catex_app.analysis import EnergyAnalysisService
 from catex_app.calculations import CalculationServiceError, CalculationWorkspaceService
+from catex_app.campaigns import CampaignService
 from catex_app.chgnet import ChgnetPreRelaxationService, ChgnetRunner
 from catex_app.hpc import HpcWorkspaceService
 from catex_app.hpc_gateway import (
@@ -48,9 +55,12 @@ from catex_app.workflow import (
     node_registry_payload,
     validate_workflow,
 )
+from catex_app.workflow_runtime import WorkflowRuntimeService
+from catex_web.routes.platform import create_platform_router
 
 MAX_VASP_OUTPUT_UPLOAD_BYTES = 512 * 1024 * 1024
 _VASP_OUTPUT_FILENAMES = {"OUTCAR", "OSZICAR"}
+_VASP_RESULT_CANONICAL_NAMES = {name.upper(): name for name in SUPPORTED_RESULT_FILES}
 
 
 def _scrub_temporary_output_paths(value: object) -> object:
@@ -82,6 +92,7 @@ class WorkflowNodeRequest(BaseModel):
     node_id: str = Field(min_length=1, max_length=128)
     type_id: str = Field(min_length=1, max_length=128)
     position: PositionRequest
+    parameters: dict[str, object] = Field(default_factory=dict)
 
 
 class WorkflowEdgeRequest(BaseModel):
@@ -232,6 +243,10 @@ class RemoteRunRequest(BaseModel):
     run_id: str = Field(min_length=1, max_length=64)
 
 
+class RemoteCancelRequest(RemoteRunRequest):
+    approved_cancel: bool
+
+
 class ResultPullRequest(RemoteRunRequest):
     approved_local_write: bool
 
@@ -316,6 +331,8 @@ def create_app(
     hpc = HpcWorkspaceService(store, hpc_gateway or ParamikoHpcGateway())
     reference_cases = ReferenceCaseService(store, Path(__file__).resolve().parents[2])
     analysis = EnergyAnalysisService(store)
+    workflow_runtime = WorkflowRuntimeService(store)
+    campaigns = CampaignService(store)
     application = FastAPI(
         title="CatEx Workbench API",
         version=__version__,
@@ -325,9 +342,10 @@ def create_app(
         CORSMiddleware,
         allow_origins=["http://127.0.0.1:5173", "http://localhost:5173"],
         allow_credentials=False,
-        allow_methods=["GET", "POST"],
+        allow_methods=["GET", "POST", "PUT", "PATCH"],
         allow_headers=["content-type"],
     )
+    application.include_router(create_platform_router(workflow_runtime, campaigns))
 
     @application.get("/api/v1/capabilities")
     def capabilities() -> dict[str, object]:
@@ -378,6 +396,7 @@ def create_app(
                 type_id=item.type_id,
                 position_x=item.position.x,
                 position_y=item.position.y,
+                parameters=item.parameters,
             )
             for item in request.nodes
         )
@@ -512,6 +531,7 @@ def create_app(
                 type_id=item.type_id,
                 position_x=item.position.x,
                 position_y=item.position.y,
+                parameters=item.parameters,
             )
             for item in request.nodes
         )
@@ -694,6 +714,23 @@ def create_app(
         except (ProjectStoreError, HpcGatewayError, OSError, ValueError) as error:
             raise HTTPException(status_code=400, detail=str(error)) from error
 
+    @application.post("/api/v1/projects/{project_id}/remote-cancel", status_code=201)
+    def cancel_remote_run(
+        project_id: str,
+        request: RemoteCancelRequest,
+    ) -> dict[str, object]:
+        try:
+            return hpc.cancel(
+                project_id,
+                request.run_id,
+                request.profile.profile(),
+                approved_cancel=request.approved_cancel,
+            )
+        except PermissionError as error:
+            raise HTTPException(status_code=403, detail=str(error)) from error
+        except (ProjectStoreError, HpcGatewayError, OSError, ValueError) as error:
+            raise HTTPException(status_code=400, detail=str(error)) from error
+
     @application.post("/api/v1/projects/{project_id}/remote-results", status_code=201)
     def pull_remote_results(project_id: str, request: ResultPullRequest) -> dict[str, object]:
         try:
@@ -856,6 +893,76 @@ def create_app(
             for upload, _ in normalized:
                 await upload.close()
 
+    @application.post("/api/v1/vasp-results/parse")
+    async def parse_uploaded_vasp_results(
+        files: Annotated[
+            list[UploadFile],
+            File(description="Supported VASP output and analysis artifacts"),
+        ],
+    ) -> dict[str, object]:
+        """Build one ephemeral result document from common VASP artifacts."""
+
+        if not 1 <= len(files) <= len(SUPPORTED_RESULT_FILES):
+            raise HTTPException(
+                status_code=400,
+                detail="Upload between 1 and 8 supported VASP result files",
+            )
+        normalized: list[tuple[UploadFile, str]] = []
+        seen: set[str] = set()
+        for upload in files:
+            filename = upload.filename or ""
+            if filename != Path(filename).name or "\\" in filename:
+                raise HTTPException(
+                    status_code=400,
+                    detail="VASP result filenames must be basenames",
+                )
+            canonical = _VASP_RESULT_CANONICAL_NAMES.get(filename.upper())
+            if canonical is None:
+                raise HTTPException(
+                    status_code=400,
+                    detail=(
+                        "Supported names are OUTCAR, OSZICAR, CONTCAR, vasprun.xml, "
+                        "XDATCAR, CHGCAR, LOCPOT, and ELFCAR"
+                    ),
+                )
+            if canonical in seen:
+                raise HTTPException(
+                    status_code=400,
+                    detail=f"Duplicate uploaded file: {canonical}",
+                )
+            seen.add(canonical)
+            normalized.append((upload, canonical))
+
+        try:
+            with tempfile.TemporaryDirectory(prefix="catex-result-document-") as temporary:
+                root = Path(temporary)
+                total_bytes = 0
+                for upload, canonical in normalized:
+                    with (root / canonical).open("xb") as destination:
+                        while chunk := await upload.read(1024 * 1024):
+                            total_bytes += len(chunk)
+                            if total_bytes > MAX_VASP_OUTPUT_UPLOAD_BYTES:
+                                raise HTTPException(
+                                    status_code=413,
+                                    detail=(
+                                        "Combined VASP result upload exceeds the 512 MiB limit"
+                                    ),
+                                )
+                            destination.write(chunk)
+                payload = build_vasp_result_document(root)
+                payload["directory"] = "browser-upload"
+                payload["upload"] = {
+                    "filenames": [canonical for _, canonical in normalized],
+                    "retained": False,
+                    "hpc_contacted": False,
+                }
+                return _scrub_temporary_output_paths(payload)  # type: ignore[return-value]
+        except VaspResultDocumentError as error:
+            raise HTTPException(status_code=400, detail=str(error)) from error
+        finally:
+            for upload, _ in normalized:
+                await upload.close()
+
     @application.post("/api/v1/thermochemistry/harmonic")
     def calculate_harmonic_thermochemistry(
         request: HarmonicThermochemistryRequest,
@@ -908,6 +1015,16 @@ def create_app(
     @application.get("/api/v1/demo/vasp-output")
     def demo_vasp_output() -> dict[str, object]:
         return parse_demo_vasp_output()
+
+    if os.environ.get("CATEX_SERVE_WEB") == "1":
+        web_dist = Path(__file__).resolve().parents[2] / "apps" / "web" / "dist"
+        if not (web_dist / "index.html").is_file():
+            raise RuntimeError("CATEX_SERVE_WEB=1 requires a built apps/web/dist directory")
+        application.mount(
+            "/",
+            StaticFiles(directory=web_dist, html=True),
+            name="catex-workbench",
+        )
 
     return application
 

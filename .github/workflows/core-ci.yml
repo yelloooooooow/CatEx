@@ -75,7 +75,9 @@ jobs:
         run: pnpm web:check
 
       - name: Check Windows launcher syntax
-        run: node --check scripts/start_web_poc.mjs
+        run: |
+          node --check scripts/start_catex.mjs
+          node --check scripts/start_web_poc.mjs
 
       - name: Test frontend
         run: pnpm web:test

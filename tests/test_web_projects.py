@@ -51,6 +51,13 @@ def test_project_bundle_contains_only_bounded_project_files(tmp_path: Path) -> N
     store = ProjectStore(tmp_path / "data")
     project = store.create_project(title="Bundle", purpose="training")
     store.add_structure(project["project_id"], "POSCAR", _poscar())
+    project_directory = store.project_directory(project["project_id"])
+    workflow_record = project_directory / "workflows" / "revisions" / "revision.json"
+    workflow_record.parent.mkdir(parents=True)
+    workflow_record.write_text('{"revision_id":"revision-test"}\n', encoding="utf-8")
+    campaign_record = project_directory / "campaigns" / "campaign-test" / "campaign.json"
+    campaign_record.parent.mkdir(parents=True)
+    campaign_record.write_text('{"campaign_id":"campaign-test"}\n', encoding="utf-8")
 
     content = store.export_bundle(project["project_id"])
     with zipfile.ZipFile(io.BytesIO(content)) as bundle:
@@ -58,6 +65,8 @@ def test_project_bundle_contains_only_bounded_project_files(tmp_path: Path) -> N
 
     assert "project.json" in names
     assert any(name.startswith("artifacts/structure-") and name.endswith(".json") for name in names)
+    assert "workflows/revisions/revision.json" in names
+    assert "campaigns/campaign-test/campaign.json" in names
     assert all("POTCAR" not in name.upper() for name in names)
 
 

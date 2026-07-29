@@ -26,6 +26,7 @@ const categoryIcons = {
   protocol: Braces,
   execution: Play,
   parsing: Microscope,
+  calculation: FlaskConical,
 }
 
 export function ScientificNode({ data, selected }: NodeProps<ScientificFlowNode>) {

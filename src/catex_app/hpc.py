@@ -9,7 +9,7 @@ from typing import Any
 from uuid import uuid4
 
 from catex.energetics import VaspEnergyKind, bind_reviewed_vasp_energy
-from catex.hpc import parse_slurm_snapshot, validate_run_binding
+from catex.hpc import assess_restart, parse_slurm_snapshot, validate_run_binding
 from catex.results import record_scientific_result_review
 from catex.vasp import parse_vasp_output
 from catex_app.hpc_gateway import HpcConnectionProfile, HpcGateway, HpcGatewayError
@@ -212,6 +212,46 @@ class HpcWorkspaceService:
         _write_json_exclusive(observations / f"{snapshot_name}.json", record)
         return record
 
+    def cancel(
+        self,
+        project_id: str,
+        run_id: str,
+        profile: HpcConnectionProfile,
+        *,
+        approved_cancel: bool,
+    ) -> dict[str, Any]:
+        """Request cancellation of one bound job without modifying remote files."""
+
+        if not approved_cancel:
+            raise PermissionError("approved_cancel=true is required")
+        run = self.projects.run_directory(project_id, run_id)
+        receipt = self.projects._read_json(run / "catex-submission-receipt.json")
+        cancellation_path = run / "catex-cancellation-receipt.json"
+        if cancellation_path.exists():
+            raise HpcGatewayError("cancellation was already requested for this run")
+        response = self.gateway.cancel(
+            profile,
+            run_id,
+            str(receipt["job_id"]),
+        )
+        cancellation = {
+            "schema_version": "catex.cancellation-receipt.v1",
+            "requested_at_utc": _utc_now(),
+            "run_id": run_id,
+            "job_id": str(receipt["job_id"]),
+            "cancellation_requested": response["cancellation_requested"],
+            "command_output_sha256": response["command_output_sha256"],
+            "remote_files_modified": False,
+            "remote_files_deleted": False,
+        }
+        _write_json_exclusive(cancellation_path, cancellation)
+        self.projects.append_event(
+            project_id,
+            "run.cancellation_requested",
+            {"run_id": run_id, "job_id": str(receipt["job_id"])},
+        )
+        return cancellation
+
     def pull_results(
         self,
         project_id: str,
@@ -241,6 +281,13 @@ class HpcWorkspaceService:
         destination = session / run_id
         download = self.gateway.download_results(profile, run_id, destination)
         parsed = parse_vasp_output(destination)
+        scheduler_report = parse_slurm_snapshot(
+            latest_snapshot.read_text(encoding="utf-8"),
+            source=report["source"],
+            job_id=str(receipt["job_id"]),
+            observed_at_utc=latest_record["observed_at_utc"],
+        )
+        restart_assessment = assess_restart(destination, scheduler_report)
         binding = validate_run_binding(
             destination,
             submission_receipt_path=receipt_path,
@@ -255,6 +302,7 @@ class HpcWorkspaceService:
             "download": download,
             "vasp": parsed.to_dict(),
             "binding": binding.to_dict(),
+            "restart_assessment": restart_assessment.to_dict(),
             "scientific_result_accepted": False,
             "human_review_required": False,
         }

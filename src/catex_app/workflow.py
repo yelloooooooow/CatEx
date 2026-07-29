@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 from collections.abc import Iterable, Mapping
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from enum import StrEnum
 from types import MappingProxyType
 from typing import Any
@@ -24,6 +24,7 @@ class PortKind(StrEnum):
     PARSED_RESULT = "parsed_result"
     REVIEWED_RESULT = "reviewed_result"
     RESULT_SUMMARY = "result_summary"
+    CALCULATION_STATE = "calculation_state"
 
 
 class NodeCategory(StrEnum):
@@ -33,6 +34,43 @@ class NodeCategory(StrEnum):
     PROTOCOL = "protocol"
     EXECUTION = "execution"
     PARSING = "parsing"
+    CALCULATION = "calculation"
+
+
+class ParameterKind(StrEnum):
+    """Editor control and validation type for a workflow node parameter."""
+
+    STRING = "string"
+    INTEGER = "integer"
+    NUMBER = "number"
+    BOOLEAN = "boolean"
+    CHOICE = "choice"
+
+
+@dataclass(frozen=True, slots=True)
+class ParameterDefinition:
+    key: str
+    label: str
+    kind: ParameterKind
+    default: Any
+    description: str = ""
+    required: bool = True
+    choices: tuple[str, ...] = ()
+    minimum: float | None = None
+    maximum: float | None = None
+
+    def to_dict(self) -> dict[str, Any]:
+        return {
+            "key": self.key,
+            "label": self.label,
+            "kind": self.kind.value,
+            "default": self.default,
+            "description": self.description,
+            "required": self.required,
+            "choices": list(self.choices),
+            "minimum": self.minimum,
+            "maximum": self.maximum,
+        }
 
 
 @dataclass(frozen=True, slots=True)
@@ -41,6 +79,7 @@ class PortDefinition:
     label: str
     kind: PortKind
     required: bool = True
+    multiple: bool = False
 
     def to_dict(self) -> dict[str, Any]:
         return {
@@ -48,6 +87,7 @@ class PortDefinition:
             "label": self.label,
             "kind": self.kind.value,
             "required": self.required,
+            "multiple": self.multiple,
         }
 
 
@@ -59,6 +99,7 @@ class NodeDefinition:
     category: NodeCategory
     inputs: tuple[PortDefinition, ...] = ()
     outputs: tuple[PortDefinition, ...] = ()
+    parameters: tuple[ParameterDefinition, ...] = ()
     review_gate: bool = False
 
     def to_dict(self) -> dict[str, Any]:
@@ -69,6 +110,7 @@ class NodeDefinition:
             "category": self.category.value,
             "inputs": [item.to_dict() for item in self.inputs],
             "outputs": [item.to_dict() for item in self.outputs],
+            "parameters": [item.to_dict() for item in self.parameters],
             "review_gate": self.review_gate,
         }
 
@@ -79,12 +121,14 @@ class WorkflowNode:
     type_id: str
     position_x: float
     position_y: float
+    parameters: Mapping[str, Any] = field(default_factory=dict)
 
     def to_dict(self) -> dict[str, Any]:
         return {
             "node_id": self.node_id,
             "type_id": self.type_id,
             "position": {"x": self.position_x, "y": self.position_y},
+            "parameters": dict(self.parameters),
         }
 
 
@@ -144,8 +188,44 @@ class WorkflowValidationReport:
         }
 
 
-def _port(port_id: str, label: str, kind: PortKind) -> PortDefinition:
-    return PortDefinition(port_id=port_id, label=label, kind=kind)
+def _port(
+    port_id: str,
+    label: str,
+    kind: PortKind,
+    *,
+    required: bool = True,
+    multiple: bool = False,
+) -> PortDefinition:
+    return PortDefinition(
+        port_id=port_id,
+        label=label,
+        kind=kind,
+        required=required,
+        multiple=multiple,
+    )
+
+
+def _parameter(
+    key: str,
+    label: str,
+    kind: ParameterKind,
+    default: Any,
+    *,
+    description: str = "",
+    choices: tuple[str, ...] = (),
+    minimum: float | None = None,
+    maximum: float | None = None,
+) -> ParameterDefinition:
+    return ParameterDefinition(
+        key=key,
+        label=label,
+        kind=kind,
+        default=default,
+        description=description,
+        choices=choices,
+        minimum=minimum,
+        maximum=maximum,
+    )
 
 
 _NODE_DEFINITIONS = (
@@ -245,6 +325,212 @@ _NODE_DEFINITIONS = (
         outputs=(_port("accepted", "已审核结果", PortKind.REVIEWED_RESULT),),
         review_gate=True,
     ),
+    NodeDefinition(
+        "vasp.input.prepare",
+        "准备 VASP 输入",
+        "读取或生成 POSCAR、INCAR、KPOINTS 和 POTCAR 元数据, 并执行运行前诊断。",
+        NodeCategory.PROTOCOL,
+        outputs=(_port("state", "计算状态", PortKind.CALCULATION_STATE),),
+        parameters=(
+            _parameter(
+                "input_mode",
+                "输入方式",
+                ParameterKind.CHOICE,
+                "project",
+                choices=("project", "generated"),
+            ),
+            _parameter(
+                "potcar_family",
+                "POTCAR 数据集",
+                ParameterKind.STRING,
+                "PAW_PBE_54",
+            ),
+        ),
+    ),
+    NodeDefinition(
+        "mlip.chgnet.relax",
+        "CHGNet 预弛豫",
+        "在本机使用机器学习势预弛豫; 结果必须经过确认后才进入 VASP。",
+        NodeCategory.CALCULATION,
+        inputs=(_port("input", "上游状态", PortKind.CALCULATION_STATE),),
+        outputs=(_port("state", "预弛豫状态", PortKind.CALCULATION_STATE),),
+        parameters=(
+            _parameter(
+                "enabled",
+                "启用",
+                ParameterKind.BOOLEAN,
+                True,
+            ),
+            _parameter(
+                "fmax_eV_per_angstrom",
+                "最大残余力",
+                ParameterKind.NUMBER,
+                0.05,
+                minimum=0.005,
+                maximum=1.0,
+            ),
+            _parameter(
+                "max_steps",
+                "最大步数",
+                ParameterKind.INTEGER,
+                500,
+                minimum=1,
+                maximum=5000,
+            ),
+            _parameter(
+                "relax_cell",
+                "弛豫晶胞",
+                ParameterKind.BOOLEAN,
+                False,
+            ),
+        ),
+    ),
+    NodeDefinition(
+        "vasp.relax",
+        "VASP 结构优化",
+        "执行离子弛豫, 并保留 CONTCAR、OUTCAR、OSZICAR 与重启文件。",
+        NodeCategory.CALCULATION,
+        inputs=(_port("input", "上游状态", PortKind.CALCULATION_STATE),),
+        outputs=(_port("state", "优化后状态", PortKind.CALCULATION_STATE),),
+        parameters=(
+            _parameter(
+                "ediff",
+                "电子收敛阈值",
+                ParameterKind.NUMBER,
+                1e-5,
+                minimum=1e-9,
+                maximum=1e-2,
+            ),
+            _parameter(
+                "ediffg",
+                "离子收敛阈值",
+                ParameterKind.NUMBER,
+                -0.02,
+                minimum=-1.0,
+                maximum=0.0,
+            ),
+            _parameter(
+                "nsw",
+                "最大离子步",
+                ParameterKind.INTEGER,
+                200,
+                minimum=1,
+                maximum=2000,
+            ),
+        ),
+    ),
+    NodeDefinition(
+        "vasp.static",
+        "VASP 静态计算",
+        "基于上游最终结构执行高精度单点能计算。",
+        NodeCategory.CALCULATION,
+        inputs=(_port("input", "上游状态", PortKind.CALCULATION_STATE),),
+        outputs=(_port("state", "静态结果", PortKind.CALCULATION_STATE),),
+        parameters=(
+            _parameter(
+                "write_charge",
+                "输出 CHGCAR",
+                ParameterKind.BOOLEAN,
+                True,
+            ),
+            _parameter(
+                "write_wave",
+                "输出 WAVECAR",
+                ParameterKind.BOOLEAN,
+                False,
+            ),
+        ),
+    ),
+    NodeDefinition(
+        "vasp.frequency",
+        "VASP 振动频率",
+        "对选定原子执行有限差分频率计算, 用于热力学校正。",
+        NodeCategory.CALCULATION,
+        inputs=(_port("input", "上游状态", PortKind.CALCULATION_STATE),),
+        outputs=(_port("state", "振动结果", PortKind.CALCULATION_STATE),),
+        parameters=(
+            _parameter(
+                "displacement",
+                "位移步长",
+                ParameterKind.NUMBER,
+                0.015,
+                minimum=0.001,
+                maximum=0.1,
+            ),
+            _parameter(
+                "mobile_selection",
+                "活动原子",
+                ParameterKind.STRING,
+                "adsorbate",
+            ),
+        ),
+    ),
+    NodeDefinition(
+        "vasp.dos",
+        "VASP DOS",
+        "从静态计算结果生成总态密度和投影态密度所需输入与结果。",
+        NodeCategory.CALCULATION,
+        inputs=(_port("input", "上游状态", PortKind.CALCULATION_STATE),),
+        outputs=(_port("state", "DOS 结果", PortKind.CALCULATION_STATE),),
+        parameters=(
+            _parameter(
+                "nedos",
+                "能量网格点",
+                ParameterKind.INTEGER,
+                2000,
+                minimum=100,
+                maximum=20000,
+            ),
+            _parameter(
+                "lorbit",
+                "投影模式",
+                ParameterKind.CHOICE,
+                "11",
+                choices=("10", "11", "12"),
+            ),
+        ),
+    ),
+    NodeDefinition(
+        "vasp.md",
+        "VASP 分子动力学",
+        "执行显式配置的从头算分子动力学任务。",
+        NodeCategory.CALCULATION,
+        inputs=(_port("input", "上游状态", PortKind.CALCULATION_STATE),),
+        outputs=(_port("state", "MD 结果", PortKind.CALCULATION_STATE),),
+        parameters=(
+            _parameter(
+                "temperature_kelvin",
+                "温度",
+                ParameterKind.NUMBER,
+                300.0,
+                minimum=1.0,
+                maximum=5000.0,
+            ),
+            _parameter(
+                "steps",
+                "步数",
+                ParameterKind.INTEGER,
+                1000,
+                minimum=1,
+                maximum=1000000,
+            ),
+        ),
+    ),
+    NodeDefinition(
+        "results.collect",
+        "汇集科学结果",
+        "统一收集各计算阶段的结构、能量、振动、DOS 与 provenance。",
+        NodeCategory.PARSING,
+        inputs=(
+            _port(
+                "results",
+                "计算结果",
+                PortKind.CALCULATION_STATE,
+                multiple=True,
+            ),
+        ),
+        outputs=(_port("summary", "结果汇总", PortKind.RESULT_SUMMARY),),
+    ),
 )
 
 NODE_REGISTRY: Mapping[str, NodeDefinition] = MappingProxyType(
@@ -309,6 +595,125 @@ def default_workflow_template() -> WorkflowTemplate:
     )
 
 
+def _calculation_template(
+    *,
+    template_id: str,
+    title: str,
+    description: str,
+    node_types: tuple[str, ...],
+    connections: tuple[tuple[int, int], ...] | None = None,
+) -> WorkflowTemplate:
+    """Build a deterministic editable calculation template."""
+
+    positions = (
+        (0.0, 120.0),
+        (300.0, 120.0),
+        (600.0, 120.0),
+        (900.0, 0.0),
+        (900.0, 240.0),
+        (1200.0, 120.0),
+    )
+    nodes = tuple(
+        WorkflowNode(
+            node_id=f"{template_id}-node-{index + 1}",
+            type_id=type_id,
+            position_x=positions[index][0],
+            position_y=positions[index][1],
+            parameters={
+                parameter.key: parameter.default for parameter in NODE_REGISTRY[type_id].parameters
+            },
+        )
+        for index, type_id in enumerate(node_types)
+    )
+    if connections is None:
+        connections = tuple((index, index + 1) for index in range(len(nodes) - 1))
+    edges = tuple(
+        WorkflowEdge(
+            edge_id=f"{template_id}-edge-{index + 1}",
+            source_node_id=nodes[source_index].node_id,
+            source_port_id=NODE_REGISTRY[nodes[source_index].type_id].outputs[0].port_id,
+            target_node_id=nodes[target_index].node_id,
+            target_port_id=NODE_REGISTRY[nodes[target_index].type_id].inputs[0].port_id,
+        )
+        for index, (source_index, target_index) in enumerate(connections)
+    )
+    return WorkflowTemplate(
+        template_id=template_id,
+        title=title,
+        description=description,
+        nodes=nodes,
+        edges=edges,
+    )
+
+
+def workflow_template_catalog() -> tuple[WorkflowTemplate, ...]:
+    """Return quick-build templates without coupling them to a research purpose."""
+
+    return (
+        _calculation_template(
+            template_id="vasp-relax",
+            title="结构优化",
+            description="准备输入、VASP 结构优化并汇集结果。",
+            node_types=("vasp.input.prepare", "vasp.relax", "results.collect"),
+        ),
+        _calculation_template(
+            template_id="vasp-relax-static",
+            title="结构优化 + 静态计算",
+            description="优化结构后执行高精度静态计算。",
+            node_types=(
+                "vasp.input.prepare",
+                "vasp.relax",
+                "vasp.static",
+                "results.collect",
+            ),
+        ),
+        _calculation_template(
+            template_id="vasp-relax-frequency",
+            title="结构优化 + 静态 + 振动频率",
+            description="用于吸附能与振动热力学校正的数据链。",
+            node_types=(
+                "vasp.input.prepare",
+                "vasp.relax",
+                "vasp.static",
+                "vasp.frequency",
+                "results.collect",
+            ),
+            connections=((0, 1), (1, 2), (2, 3), (2, 4), (3, 4)),
+        ),
+        _calculation_template(
+            template_id="vasp-relax-static-dos",
+            title="结构优化 + 静态 + DOS",
+            description="在静态计算基础上分支执行态密度计算。",
+            node_types=(
+                "vasp.input.prepare",
+                "vasp.relax",
+                "vasp.static",
+                "vasp.dos",
+                "results.collect",
+            ),
+            connections=((0, 1), (1, 2), (2, 3), (2, 4), (3, 4)),
+        ),
+        _calculation_template(
+            template_id="chgnet-vasp-relax-static",
+            title="CHGNet 预弛豫 + VASP 优化 + 静态",
+            description="可选机器学习势预弛豫后进入 VASP 验证计算。",
+            node_types=(
+                "vasp.input.prepare",
+                "mlip.chgnet.relax",
+                "vasp.relax",
+                "vasp.static",
+                "results.collect",
+            ),
+        ),
+        _calculation_template(
+            template_id="vasp-md",
+            title="从头算分子动力学",
+            description="准备输入、执行 VASP MD 并汇集轨迹和运行结果。",
+            node_types=("vasp.input.prepare", "vasp.md", "results.collect"),
+        ),
+    )
+
+
 def _duplicates(values: Iterable[str]) -> set[str]:
     seen: set[str] = set()
     duplicates: set[str] = set()
@@ -348,7 +753,8 @@ def validate_workflow(
 
     node_map = {item.node_id: item for item in nodes}
     for node in nodes:
-        if node.type_id not in NODE_REGISTRY:
+        definition = NODE_REGISTRY.get(node.type_id)
+        if definition is None:
             diagnostics.append(
                 Diagnostic(
                     "WORKFLOW_NODE_TYPE_UNKNOWN",
@@ -357,6 +763,80 @@ def validate_workflow(
                     {"node_id": node.node_id, "type_id": node.type_id},
                 )
             )
+            continue
+        parameter_map = {item.key: item for item in definition.parameters}
+        for key in sorted(set(node.parameters) - set(parameter_map)):
+            diagnostics.append(
+                Diagnostic(
+                    "WORKFLOW_PARAMETER_UNKNOWN",
+                    Severity.ERROR,
+                    "The workflow node contains an unregistered parameter.",
+                    {"node_id": node.node_id, "parameter": key},
+                )
+            )
+        for key, value in node.parameters.items():
+            parameter = parameter_map.get(key)
+            if parameter is None:
+                continue
+            valid_type = {
+                ParameterKind.STRING: isinstance(value, str),
+                ParameterKind.INTEGER: isinstance(value, int) and not isinstance(value, bool),
+                ParameterKind.NUMBER: isinstance(value, (int, float))
+                and not isinstance(value, bool),
+                ParameterKind.BOOLEAN: isinstance(value, bool),
+                ParameterKind.CHOICE: isinstance(value, str),
+            }[parameter.kind]
+            if not valid_type:
+                diagnostics.append(
+                    Diagnostic(
+                        "WORKFLOW_PARAMETER_TYPE_INVALID",
+                        Severity.ERROR,
+                        "A workflow parameter has an invalid value type.",
+                        {
+                            "node_id": node.node_id,
+                            "parameter": key,
+                            "expected": parameter.kind.value,
+                        },
+                    )
+                )
+                continue
+            if parameter.choices and value not in parameter.choices:
+                diagnostics.append(
+                    Diagnostic(
+                        "WORKFLOW_PARAMETER_CHOICE_INVALID",
+                        Severity.ERROR,
+                        "A workflow choice parameter is outside the registered choices.",
+                        {"node_id": node.node_id, "parameter": key, "value": value},
+                    )
+                )
+            if (
+                isinstance(value, (int, float))
+                and not isinstance(value, bool)
+                and parameter.minimum is not None
+                and value < parameter.minimum
+            ):
+                diagnostics.append(
+                    Diagnostic(
+                        "WORKFLOW_PARAMETER_BELOW_MINIMUM",
+                        Severity.ERROR,
+                        "A workflow numeric parameter is below its minimum.",
+                        {"node_id": node.node_id, "parameter": key, "value": value},
+                    )
+                )
+            if (
+                isinstance(value, (int, float))
+                and not isinstance(value, bool)
+                and parameter.maximum is not None
+                and value > parameter.maximum
+            ):
+                diagnostics.append(
+                    Diagnostic(
+                        "WORKFLOW_PARAMETER_ABOVE_MAXIMUM",
+                        Severity.ERROR,
+                        "A workflow numeric parameter is above its maximum.",
+                        {"node_id": node.node_id, "parameter": key, "value": value},
+                    )
+                )
 
     connected_inputs: set[tuple[str, str]] = set()
     adjacency: dict[str, set[str]] = {node.node_id: set() for node in nodes}
@@ -409,7 +889,7 @@ def validate_workflow(
                 )
             )
         input_key = (edge.target_node_id, edge.target_port_id)
-        if input_key in connected_inputs:
+        if input_key in connected_inputs and not target_port.multiple:
             diagnostics.append(
                 Diagnostic(
                     "WORKFLOW_INPUT_CONNECTED_MULTIPLE_TIMES",

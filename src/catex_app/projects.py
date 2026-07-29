@@ -351,6 +351,10 @@ class ProjectStore:
             stage = self._read_json(stage_path) if stage_path.is_file() else None
             receipt_path = run_directory / "catex-submission-receipt.json"
             receipt = self._read_json(receipt_path) if receipt_path.is_file() else None
+            cancellation_path = run_directory / "catex-cancellation-receipt.json"
+            cancellation = (
+                self._read_json(cancellation_path) if cancellation_path.is_file() else None
+            )
             result_records = (
                 sorted((run_directory / "results").glob("pull-*/*/result.json"))
                 if (run_directory / "results").is_dir()
@@ -368,6 +372,7 @@ class ProjectStore:
                     or bool(stage and stage.get("potcar_materialized_on_hpc") is True),
                     "submitted": receipt is not None,
                     "job_id": receipt.get("job_id") if receipt else None,
+                    "cancellation_requested": cancellation is not None,
                     "result_count": len(result_records),
                 }
             )
@@ -402,7 +407,15 @@ class ProjectStore:
             for path in sorted((directory / "artifacts").iterdir()):
                 if path.is_file():
                     bundle.write(path, f"artifacts/{path.name}")
-            for folder in ("reviews", "config", "runs", "analysis", "pre-relaxations"):
+            for folder in (
+                "reviews",
+                "config",
+                "runs",
+                "analysis",
+                "pre-relaxations",
+                "workflows",
+                "campaigns",
+            ):
                 root = directory / folder
                 if not root.is_dir():
                     continue

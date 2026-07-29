@@ -10,6 +10,7 @@ import type {
 
 export type ScientificNodeData = Record<string, unknown> & {
   definition: NodeDefinition
+  parameters: Record<string, string | number | boolean>
   status: RuntimeStatus
   detail?: string
 }
@@ -22,6 +23,7 @@ export interface WorkflowValidationRequest {
     node_id: string
     type_id: string
     position: { x: number; y: number }
+    parameters: Record<string, string | number | boolean>
   }>
   edges: Array<{
     edge_id: string
@@ -72,12 +74,19 @@ export function templateNodeToFlow(
   node: WorkflowTemplateNode,
   registry: Map<string, NodeDefinition>,
 ): ScientificFlowNode {
+  const definition = definitionFor(node, registry)
   return {
     id: node.node_id,
     type: 'scientific',
     position: node.position,
     data: {
-      definition: definitionFor(node, registry),
+      definition,
+      parameters: {
+        ...Object.fromEntries(
+          definition.parameters.map((parameter) => [parameter.key, parameter.default]),
+        ),
+        ...node.parameters,
+      },
       status: 'idle',
     },
   }
@@ -120,6 +129,7 @@ export function buildValidationRequest(
       node_id: node.id,
       type_id: node.data.definition.type_id,
       position: node.position,
+      parameters: node.data.parameters,
     })),
     edges: edges.map((edge) => {
       const source = parseHandleId(edge.sourceHandle)
@@ -142,6 +152,37 @@ export function rehydrateNodes(
   return nodes.map((node) => {
     const definition = registry.get(node.data.definition.type_id)
     if (!definition) throw new Error(`Unregistered node type: ${node.data.definition.type_id}`)
-    return { ...node, data: { ...node.data, definition } }
+    return {
+      ...node,
+      data: {
+        ...node.data,
+        definition,
+        parameters: {
+          ...Object.fromEntries(
+            definition.parameters.map((parameter) => [parameter.key, parameter.default]),
+          ),
+          ...node.data.parameters,
+        },
+      },
+    }
   })
+}
+
+export function createFlowNode(
+  definition: NodeDefinition,
+  position: { x: number; y: number },
+  id: string,
+): ScientificFlowNode {
+  return {
+    id,
+    type: 'scientific',
+    position,
+    data: {
+      definition,
+      parameters: Object.fromEntries(
+        definition.parameters.map((parameter) => [parameter.key, parameter.default]),
+      ),
+      status: 'idle',
+    },
+  }
 }

@@ -95,6 +95,38 @@ const nodeTranslations: Record<string, { title: string; description: string }> =
     title: 'Summarize results',
     description: 'Summarize energy, convergence, final structure, vibrations, and diagnostics.',
   },
+  'vasp.input.prepare': {
+    title: 'Prepare VASP inputs',
+    description: 'Read or generate VASP inputs and run preflight diagnostics.',
+  },
+  'mlip.chgnet.relax': {
+    title: 'CHGNet pre-relaxation',
+    description: 'Pre-relax locally with an ML potential before confirmed VASP work.',
+  },
+  'vasp.relax': {
+    title: 'VASP relaxation',
+    description: 'Run ionic relaxation and retain restart and provenance artifacts.',
+  },
+  'vasp.static': {
+    title: 'VASP static calculation',
+    description: 'Run a high-accuracy single-point calculation on the upstream structure.',
+  },
+  'vasp.frequency': {
+    title: 'VASP frequencies',
+    description: 'Calculate finite-difference vibrational modes for thermochemistry.',
+  },
+  'vasp.dos': {
+    title: 'VASP DOS',
+    description: 'Produce total and projected density-of-states results.',
+  },
+  'vasp.md': {
+    title: 'VASP molecular dynamics',
+    description: 'Run an explicitly configured ab initio molecular dynamics stage.',
+  },
+  'results.collect': {
+    title: 'Collect scientific results',
+    description: 'Collect structures, energies, vibrations, DOS, and provenance.',
+  },
 }
 
 const portTranslations: Record<string, string> = {
@@ -108,6 +140,27 @@ const portTranslations: Record<string, string> = {
   parsed_result: 'Parsed result',
   reviewed_result: 'Reviewed result',
   result_summary: 'Result summary',
+  calculation_state: 'Calculation state',
+}
+
+const parameterTranslations: Record<string, string> = {
+  input_mode: 'Input mode',
+  potcar_family: 'POTCAR family',
+  enabled: 'Enabled',
+  fmax_eV_per_angstrom: 'Maximum residual force',
+  max_steps: 'Maximum steps',
+  relax_cell: 'Relax cell',
+  ediff: 'Electronic convergence',
+  ediffg: 'Ionic convergence',
+  nsw: 'Maximum ionic steps',
+  write_charge: 'Write CHGCAR',
+  write_wave: 'Write WAVECAR',
+  displacement: 'Displacement',
+  mobile_selection: 'Mobile atoms',
+  nedos: 'Energy grid points',
+  lorbit: 'Projection mode',
+  temperature_kelvin: 'Temperature',
+  steps: 'Steps',
 }
 
 export function localizeNodeDefinition(
@@ -127,6 +180,10 @@ export function localizeNodeDefinition(
     outputs: definition.outputs.map((port) => ({
       ...port,
       label: portTranslations[port.kind] ?? port.label,
+    })),
+    parameters: definition.parameters.map((parameter) => ({
+      ...parameter,
+      label: parameterTranslations[parameter.key] ?? parameter.label,
     })),
   }
 }
@@ -158,6 +215,7 @@ export const categoryLabels: Record<Language, Record<string, string>> = {
     protocol: '协议',
     execution: '执行',
     parsing: '解析',
+    calculation: '计算',
   },
   en: {
     source: 'source',
@@ -166,5 +224,6 @@ export const categoryLabels: Record<Language, Record<string, string>> = {
     protocol: 'protocol',
     execution: 'execution',
     parsing: 'parsing',
+    calculation: 'calculation',
   },
 }

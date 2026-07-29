@@ -12,15 +12,36 @@ export interface PortDefinition {
   label: string
   kind: string
   required: boolean
+  multiple: boolean
+}
+
+export interface ParameterDefinition {
+  key: string
+  label: string
+  kind: 'string' | 'integer' | 'number' | 'boolean' | 'choice'
+  default: string | number | boolean
+  description: string
+  required: boolean
+  choices: string[]
+  minimum: number | null
+  maximum: number | null
 }
 
 export interface NodeDefinition {
   type_id: string
   title: string
   description: string
-  category: 'source' | 'structure' | 'review' | 'protocol' | 'execution' | 'parsing'
+  category:
+    | 'source'
+    | 'structure'
+    | 'review'
+    | 'protocol'
+    | 'execution'
+    | 'parsing'
+    | 'calculation'
   inputs: PortDefinition[]
   outputs: PortDefinition[]
+  parameters: ParameterDefinition[]
   review_gate: boolean
 }
 
@@ -28,6 +49,7 @@ export interface WorkflowTemplateNode {
   node_id: string
   type_id: string
   position: { x: number; y: number }
+  parameters: Record<string, string | number | boolean>
 }
 
 export interface WorkflowTemplateEdge {
@@ -260,9 +282,110 @@ export interface StructureReview {
 }
 
 export interface SavedWorkflowPayload {
-  schema_version: 'catex.web-workflow.v1'
+  schema_version: 'catex.web-workflow.v1' | 'catex.workflow-draft.v1'
   nodes: WorkflowTemplateNode[]
   edges: WorkflowTemplateEdge[]
+  draft_sha256?: string
+  generation?: number
+  saved_at_utc?: string | null
+}
+
+export interface WorkflowDraft extends SavedWorkflowPayload {
+  schema_version: 'catex.workflow-draft.v1'
+  draft_sha256: string
+  generation: number
+  saved_at_utc: string | null
+}
+
+export interface WorkflowRevision {
+  schema_version: 'catex.workflow-revision.v1'
+  revision_id: string
+  content_sha256: string
+  published_at_utc: string
+  title: string
+  note: string
+  workflow: {
+    nodes: WorkflowTemplateNode[]
+    edges: WorkflowTemplateEdge[]
+  }
+}
+
+export interface WorkflowRunGraph {
+  schema_version: 'catex.workflow-run-graph.v1'
+  run_graph_id: string
+  revision_id: string
+  workflow_sha256: string
+  created_at_utc: string
+  label: string
+  bindings: Record<string, unknown>
+  workflow: {
+    nodes: WorkflowTemplateNode[]
+    edges: WorkflowTemplateEdge[]
+  }
+  state: 'planned'
+}
+
+export interface WorkflowExecutionPlan {
+  schema_version: 'catex.workflow-execution-plan.v1'
+  stage_count: number
+  stages: Array<{
+    stage_id: string
+    node_id: string
+    node_type: string
+    depends_on: string[]
+    execution_backend: 'local_chgnet' | 'project_hpc_profile'
+    calculation_type: string
+    directory_name: string
+    structure_source: 'project_structure' | 'upstream_CONTCAR'
+    incar_overrides: Record<string, string | number | boolean>
+    parameters: Record<string, string | number | boolean>
+    required_inputs: string[]
+    produced_outputs: string[]
+  }>
+  commands_executed: false
+  files_written: false
+  submitted: false
+  automatic_scientific_parameter_changes: false
+}
+
+export interface WorkflowTemplateCatalogItem extends WorkflowTemplate {
+  validation: WorkflowValidation
+}
+
+export interface CampaignRecord {
+  schema_version: 'catex.campaign.v1'
+  campaign_id: string
+  project_id: string
+  title: string
+  objective: string
+  workflow_revision_id: string | null
+  status: 'active' | 'paused' | 'completed' | 'archived'
+  created_at_utc: string
+  updated_at_utc?: string
+  candidate_count: number
+  decision_count: number
+}
+
+export interface CampaignCandidate {
+  schema_version: 'catex.campaign-candidate.v1'
+  candidate_id: string
+  campaign_id: string
+  label: string
+  structure_artifact_id: string | null
+  variables: Record<string, unknown>
+  status: 'proposed' | 'prepared' | 'running' | 'succeeded' | 'failed' | 'excluded'
+  created_at_utc: string
+}
+
+export interface CampaignDecision {
+  schema_version: 'catex.campaign-decision.v1'
+  decision_id: string
+  campaign_id: string
+  candidate_id: string | null
+  action: string
+  rationale: string
+  evidence: Record<string, unknown>
+  recorded_at_utc: string
 }
 
 export interface CalculationConfig {
@@ -329,6 +452,7 @@ export interface RunSummary {
   potcar_materialized: boolean
   submitted: boolean
   job_id: string | null
+  cancellation_requested: boolean
   result_count: number
 }
 
@@ -388,6 +512,17 @@ export interface HpcObservation {
   writes_performed_remotely: false
 }
 
+export interface HpcCancellationReceipt {
+  schema_version: 'catex.cancellation-receipt.v1'
+  requested_at_utc: string
+  run_id: string
+  job_id: string
+  cancellation_requested: true
+  command_output_sha256: string
+  remote_files_modified: false
+  remote_files_deleted: false
+}
+
 export interface RemoteRunResult {
   schema_version: 'catex.web-run-result.v1'
   run_id: string
@@ -398,6 +533,16 @@ export interface RemoteRunResult {
     binding_valid: boolean
     scheduler_success: boolean
     ready_for_scientific_review: boolean
+    diagnostics: Diagnostic[]
+  }
+  restart_assessment: {
+    schema_version: 'catex.restart-assessment.v1'
+    status: 'blocked' | 'manual_review_required' | 'no_restart' | 'wait'
+    failure_categories: string[]
+    required_reviews: string[]
+    restart_authorized: false
+    restart_inputs_materialized: false
+    scientific_parameters_changed: false
     diagnostics: Diagnostic[]
   }
   scientific_result_accepted: false
@@ -532,6 +677,53 @@ export interface VaspDemoResult {
     synthetic: true
     scientific_result_eligible: false
     commands_executed: false
+    hpc_contacted: false
+  }
+}
+
+export interface VaspResultDocument {
+  schema_version: 'catex.vasp-result-document.v1'
+  directory: string
+  artifact_inventory: Array<{
+    filename: string
+    size_bytes: number
+    sha256: string
+  }>
+  energy: {
+    free_energy_eV: number | null
+    energy_without_entropy_eV?: number | null
+    sigma_zero_energy_eV: number | null
+    source?: string
+  } | null
+  vasp_output: VaspDemoResult | null
+  vasprun: {
+    filename: 'vasprun.xml'
+    ionic_step_count: number
+    free_energy_eV: number | null
+    sigma_zero_energy_eV: number | null
+    fermi_energy_eV: number | null
+  } | null
+  final_structure: {
+    source: 'CONTCAR'
+    record: StructureRecord
+    viewer: ViewerPayload
+  } | null
+  trajectory: {
+    filename: 'XDATCAR'
+    frame_count: number
+    coordinate_marker: string | null
+  } | null
+  volumetric: Array<{
+    filename: 'CHGCAR' | 'LOCPOT' | 'ELFCAR'
+    kind: string
+    grid_dimensions: number[] | null
+    grid_point_count: number | null
+    values_included_in_document: false
+  }>
+  diagnostics: Diagnostic[]
+  upload?: {
+    filenames: string[]
+    retained: false
     hpc_contacted: false
   }
 }

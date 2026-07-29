@@ -1,6 +1,6 @@
 # CatEx Workbench 使用指南
 
-CatEx 是 **Catalysis Exploration** 的正式简称。v0.27.0 工作台把科学核心包装为本机 Web
+CatEx 是 **Catalysis Exploration** 的正式简称。v0.30.0 工作台把科学核心包装为本机 Web
 应用，以自动诊断连接 VASP 5.4.4 与 Slurm，并保留本地写入、远端写入和作业提交确认。
 
 ## 启动
@@ -11,8 +11,9 @@ Windows 用户在仓库根目录双击：
 启动 CatEx 工作台.cmd
 ```
 
-启动器检查 Python、Node.js 和前端依赖，启动仅监听 `127.0.0.1` 的 API 与网页，并打开
-`http://127.0.0.1:5173`。使用期间保留启动窗口；按回车可停止本次创建的前后端子进程。
+启动器检查 Python、Node.js 和前端依赖，需要时生成前端生产构建，然后启动仅监听
+`127.0.0.1` 的一体化应用并打开 `http://127.0.0.1:8000`。使用期间保留启动窗口；
+按回车可停止本次创建的服务。
 如果默认端口仍被旧工作台占用，启动器会明确停止并提示关闭旧进程或选择新端口，不会把旧 API
 误认为当前版本。
 
@@ -28,7 +29,7 @@ pnpm web:poc
 需要避开已占用端口时：
 
 ```powershell
-node scripts/start_web_poc.mjs --api-port=8001 --web-port=5174
+node scripts/start_catex.mjs --port=8001
 ```
 
 首次安装或更新 Python 依赖：
@@ -40,7 +41,8 @@ pnpm install --frozen-lockfile
 
 ## 推荐全流程
 
-1. 在“项目”创建项目。
+1. 在“项目”创建项目；在“工作流”从 Quick Build 选择常用流程，或进入节点图增删、连接、
+   复制节点并修改参数。保存的是项目草稿，发布后形成不可变版本，运行快照不会自动执行命令。
 2. 在“结构工作台”选择一个本地工作文件夹。CatEx 会自动寻找结构、INCAR、KPOINTS、
    POTCAR metadata 和 Slurm 脚本；各文件卡片仍可单独“导入/替换”，替换已有来源前会确认。
 3. 上传 POSCAR、CONTCAR、`.vasp` 或 CIF。CIF 会自动转换为 POSCAR；已经选择工作文件夹时，
@@ -62,11 +64,14 @@ pnpm install --frozen-lockfile
 10. 明确确认后，在允许根目录下新建以项目名命名的唯一子目录，上传输入，上传并运行 CatEx
    内置的独占式 POTCAR 构建器。构建器不覆盖、不删除文件，核对分数据集和合并文件哈希；成功后
    将同一份 POTCAR 复制到用户选择的本地工作文件夹。
-10. 再次明确确认后提交一次 `sbatch`。用只读 `squeue` / `sacct` 观察作业，终态后下载白名单
+11. 再次明确确认后提交一次 `sbatch`。用固定字段 `squeue` / `sacct` 观察作业；如需取消，
+    必须单独勾选并只对当前绑定 job ID 执行一次 `scancel`，不会删除远端文件。终态后下载白名单
     结果并解析。
-11. 在“计算结果”查看结束原因、是否满足 INCAR 收敛标准、电子/离子步数、能量、最大力、
+12. 在“计算结果”查看结束原因、是否满足 INCAR 收敛标准、电子/离子步数、能量、最大力、
     初始/最终球棍结构和自动诊断。振动计算可展示频率及谐振动校正。
-12. 在“反应分析”选择 HER 或 OER 模板，绑定多个结果并生成自由能台阶图。
+13. 在“反应分析”选择 HER 或 OER 模板，绑定项目结果，或上传 OUTCAR、OSZICAR、
+    vasprun.xml、CONTCAR、XDATCAR、CHGCAR、LOCPOT、ELFCAR 的受限组合并生成台阶图。
+14. 长期筛选在“科研 Campaign”追加候选、设计变量和决策记录；它引用工作流版本而不复制核心。
 
 “工作流”页面中的节点可以双击跳到相应页面；左侧步骤也可单击跳转。“VASP 输入诊断”不是一个
 需要单独批准的人工步骤，而是在结构和输入发生变化时自动执行的校验节点。
@@ -106,7 +111,8 @@ pnpm install --frozen-lockfile
 - POTCAR 只允许由远端受控脚本生成；复制到本地前必须完成远端构建回执与 SHA-256 一致性校验，
   且只能写入用户已授权的工作文件夹。内容不进入项目数据库、导出包或 Git。
 - 结果下载白名单不包含 POTCAR、WAVECAR 或 CHGCAR。
-- 当前没有 cancel、requeue、自动续算、checkpoint 复制或远端清理接口。
+- 当前没有 requeue、自动续算、checkpoint 复制或远端清理接口。取消只允许当前回执绑定的
+  单个 job ID，并要求独立确认；失败分类和续算建议不构成重新提交授权。
 - Paper 4 readiness 的 blocked/null 值不会被默认值静默替代。
 
 ## 项目数据

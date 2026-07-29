@@ -4,7 +4,7 @@ build-backend = "hatchling.build"
 
 [project]
 name = "catex-workbench"
-version = "0.27.0"
+version = "0.30.0"
 description = "CatEx: traceable scientific core and interactive workbench for catalysis workflows."
 readme = "README.md"
 license = "BSD-3-Clause"
@@ -71,6 +71,8 @@ include = [
   "/docs/REACTION_NETWORK_CHE_AND_READINESS.md",
   "/docs/WEB_POC.md",
   "/docs/adr/0003-web-workbench-architecture.md",
+  "/docs/adr/0004-workflow-runtime-and-campaigns.md",
+  "/docs/WORKFLOW_STUDIO_AND_CAMPAIGNS.md",
   "/apps/web",
   "/package.json",
   "/pnpm-lock.yaml",

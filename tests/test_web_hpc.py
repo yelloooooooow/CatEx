@@ -166,6 +166,13 @@ class FakeGateway:
             "snapshot": f"{job_id}|COMPLETED|0:0|41\n",
         }
 
+    def cancel(self, profile: HpcConnectionProfile, run_id: str, job_id: str) -> dict[str, Any]:
+        self.calls.append("cancel")
+        return {
+            "cancellation_requested": True,
+            "command_output_sha256": "f" * 64,
+        }
+
     def download_results(
         self, profile: HpcConnectionProfile, run_id: str, destination: Path
     ) -> dict[str, Any]:
@@ -222,7 +229,7 @@ def _prepared_workspace(tmp_path: Path) -> tuple[ProjectStore, dict[str, Any], s
 def _profile() -> HpcConnectionProfile:
     return HpcConnectionProfile(
         host="cluster.example",
-        port=6666,
+        port=2222,
         username="user_1",
         private_key_path="C:/private/key",
         allowed_root="/approved/project/test",
@@ -285,9 +292,55 @@ def test_hpc_lifecycle_uses_independent_gates_and_never_downloads_potcar(tmp_pat
     assert result["analysis_eligible"] is True
     assert result["final_structure"]["viewer"]["species"] == ["Na", "Cl"]
     assert result["download"]["potcar_downloaded"] is False
+    assert result["restart_assessment"]["status"] == "no_restart"
     assert review["decision"] == "rejected"
     assert review["scientific_result_accepted"] is False
     assert gateway.calls == ["stage", "submit", "observe", "download"]
+
+
+def test_hpc_cancel_requires_confirmation_and_is_recorded_once(tmp_path: Path) -> None:
+    store, project, plan_sha256 = _prepared_workspace(tmp_path)
+    gateway = FakeGateway()
+    service = HpcWorkspaceService(store, gateway)
+    service.stage(
+        project["project_id"],
+        "nacl-static-001",
+        _profile(),
+        confirm_plan_sha256=plan_sha256,
+        approved_remote_write=True,
+    )
+    service.submit(
+        project["project_id"],
+        "nacl-static-001",
+        _profile(),
+        confirm_plan_sha256=plan_sha256,
+        approved_submit=True,
+    )
+
+    with pytest.raises(PermissionError, match="approved_cancel"):
+        service.cancel(
+            project["project_id"],
+            "nacl-static-001",
+            _profile(),
+            approved_cancel=False,
+        )
+    receipt = service.cancel(
+        project["project_id"],
+        "nacl-static-001",
+        _profile(),
+        approved_cancel=True,
+    )
+    with pytest.raises(HpcGatewayError, match="already requested"):
+        service.cancel(
+            project["project_id"],
+            "nacl-static-001",
+            _profile(),
+            approved_cancel=True,
+        )
+
+    assert receipt["job_id"] == "12345"
+    assert receipt["remote_files_deleted"] is False
+    assert gateway.calls == ["stage", "submit", "cancel"]
 
 
 def test_potcar_copy_requires_explicit_gate_and_matches_stage_hash(tmp_path: Path) -> None:
@@ -329,7 +382,7 @@ def test_hpc_api_does_not_echo_or_persist_connection_secrets(tmp_path: Path) -> 
         json={
             "profile": {
                 "host": "cluster.example",
-                "port": 6666,
+                "port": 2222,
                 "username": "user_1",
                 "private_key_path": key_path,
                 "allowed_root": "/approved/project/test",
@@ -357,7 +410,7 @@ def test_hpc_api_reads_only_sanitized_potcar_metadata(tmp_path: Path) -> None:
         json={
             "profile": {
                 "host": "cluster.example",
-                "port": 6666,
+                "port": 2222,
                 "username": "user_1",
                 "private_key_path": "C:/private/do-not-retain-key",
                 "allowed_root": "/approved/project/test",

@@ -9,6 +9,21 @@ const nodeEnvironment = (
 
 export default defineConfig({
   plugins: [react()],
+  build: {
+    chunkSizeWarningLimit: 1200,
+    rollupOptions: {
+      output: {
+        manualChunks(id) {
+          if (id.includes('node_modules/weas') || id.includes('node_modules/three')) {
+            return 'molecular-viewer'
+          }
+          if (id.includes('node_modules/@xyflow')) return 'workflow-graph'
+          if (id.includes('node_modules/react')) return 'react-runtime'
+          return undefined
+        },
+      },
+    },
+  },
   server: {
     host: '127.0.0.1',
     port: 5173,

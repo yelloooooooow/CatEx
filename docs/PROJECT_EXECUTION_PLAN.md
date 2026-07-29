@@ -1,10 +1,10 @@
 # CatEx（Catalysis Exploration）：完整可执行计划
 
-版本：Implementation Baseline 1.0
+版本：Platform Foundation 2.0
 
 日期：2026-07-16
 
-状态：PR-001 至 PR-024 已实现；本地 Web 与受控 HPC 初版闭环完成，Paper 4 真实生产验收仍受证据门禁阻塞
+状态：科学核心、本地 Web、受控单作业 HPC、可编辑 DAG、不可变运行图和 Campaign 初版已实现；Paper 4 真实生产验收仍受证据门禁阻塞
 
 ## 1. 产品目标
 
@@ -111,7 +111,7 @@ Adapters
 
 交付物：
 
-- 私有 GitHub 仓库；
+- 通过敏感信息与许可证审计的公开 GitHub 仓库；
 - README、ADR、数据安全策略和本计划；
 - `.gitignore` 与敏感数据扫描；
 - Python 包名占位符和命名审计任务；
@@ -213,7 +213,17 @@ PR-016 已完成 source-bound 电子结构数值分析和完整非 Paper 4 端�
 
 ### Phase 7：产品化
 
-仅在科学核心稳定后考虑：
+已完成的平台基础：
+
+- Quick Build、可编辑类型化 DAG 和节点参数面板；
+- 单一项目草稿、内容寻址的不可变发布版本和运行快照；
+- CHGNet/VASP 优化、静态、频率、DOS、MD 的多阶段计划编译；
+- 显式 Slurm 取消门、失败分类和不自动执行的续算评估；
+- OUTCAR、vasprun.xml、CONTCAR、XDATCAR 与体数据的统一结果文档；
+- Campaign 候选、设计变量和追加式科研决策；
+- 单端口生产构建与 Windows 双击启动。
+
+后续产品化：
 
 - jobflow/quacc/custodian 适配；
 - 数据库和检索；
@@ -402,7 +412,7 @@ PR-016 已完成 source-bound 电子结构数值分析和完整非 Paper 4 端�
 - 远端写入限于白名单根目录的一个全新直接子目录，禁止覆盖和删除；
 - POTCAR 只能由批准的远端脚本服务器端生成，永不上传到 Web 或下载到本地；
 - `sbatch`、`squeue` 和 `sacct` 使用固定命令模板与严格字段；
-- 远端准备、提交、观测和结果拉取分别需要独立门禁；没有 cancel、requeue 或清理接口。
+- 远端准备、提交、观测、单作业取消和结果拉取分别需要独立门禁；没有 requeue 或清理接口。
 
 ### PR-024：结果绑定、能量账本与 Paper 4 验收入口
 

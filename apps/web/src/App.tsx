@@ -1,14 +1,9 @@
 import {
-  Background,
-  Controls,
   MarkerType,
-  MiniMap,
-  ReactFlow,
   addEdge,
   useEdgesState,
   useNodesState,
   type Connection,
-  type NodeTypes,
 } from '@xyflow/react'
 import {
   Activity,
@@ -38,7 +33,6 @@ import {
   Server,
   Play,
   RefreshCw,
-  RotateCcw,
   Save,
   ServerOff,
   ShieldCheck,
@@ -48,9 +42,13 @@ import {
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 
 import { api } from './api'
+import { CampaignWorkbench } from './components/CampaignWorkbench'
 import { FreeEnergyDiagram } from './components/FreeEnergyDiagram'
-import { ScientificNode } from './components/ScientificNode'
 import { StructureViewer } from './components/StructureViewer'
+import {
+  localizeWorkflowTemplate,
+  WorkflowWorkbench,
+} from './components/WorkflowWorkbench'
 import { localizeNodeDefinition, useI18n } from './i18n'
 import {
   canResumeExistingRun,
@@ -96,6 +94,9 @@ import type {
   StructureInspectionResponse,
   TemplateResponse,
   VaspDemoResult,
+  WorkflowRevision,
+  WorkflowRunGraph,
+  WorkflowTemplateCatalogItem,
 } from './types'
 import {
   buildValidationRequest,
@@ -116,7 +117,6 @@ import {
 import '@xyflow/react/dist/style.css'
 import './styles.css'
 
-const nodeTypes: NodeTypes = { scientific: ScientificNode }
 const STORAGE_KEY = 'catex.web-poc.workflow.v2'
 const ACTIVE_STRUCTURE_STORAGE_PREFIX = 'catex.web-poc.active-structure.'
 const REVIEW_NOTE_ZH = '已核对结构、协议、POTCAR 元数据与资源配置。'
@@ -139,7 +139,15 @@ Direct
 0.500000 0.500000 0.500000 Cl
 `
 
-type WorkspaceView = 'projects' | 'workflow' | 'structure' | 'protocol' | 'runs' | 'results' | 'analysis'
+type WorkspaceView =
+  | 'projects'
+  | 'workflow'
+  | 'structure'
+  | 'protocol'
+  | 'runs'
+  | 'results'
+  | 'analysis'
+  | 'campaigns'
 type NoticeTone = 'neutral' | 'success' | 'warning' | 'error'
 
 interface Notice {
@@ -188,6 +196,14 @@ const NODE_VIEW: Record<string, WorkspaceView> = {
   'execution.mock': 'runs',
   'vasp.parse': 'results',
   'results.summarize': 'results',
+  'vasp.input.prepare': 'protocol',
+  'mlip.chgnet.relax': 'structure',
+  'vasp.relax': 'protocol',
+  'vasp.static': 'protocol',
+  'vasp.frequency': 'protocol',
+  'vasp.dos': 'protocol',
+  'vasp.md': 'protocol',
+  'results.collect': 'results',
 }
 
 const LEGACY_STRUCTURE_WORKFLOW_NODES = new Set(['structure.upload', 'structure.inspect'])
@@ -292,6 +308,7 @@ const navItems: Array<{
   { id: 'runs', labelZh: '运行中心', labelEn: 'Run Center', shortLabelZh: '运', shortLabelEn: 'R', icon: Server },
   { id: 'results', labelZh: '计算结果', labelEn: 'Results', shortLabelZh: '果', shortLabelEn: 'E', icon: Gauge },
   { id: 'analysis', labelZh: '反应分析', labelEn: 'Reaction Analysis', shortLabelZh: '析', shortLabelEn: 'A', icon: ChartNoAxesCombined },
+  { id: 'campaigns', labelZh: '科研 Campaign', labelEn: 'Campaigns', shortLabelZh: '筛', shortLabelEn: 'C', icon: Database },
 ]
 
 function formatNumber(value: number | null | undefined, digits = 3): string {
@@ -330,10 +347,16 @@ async function readSmallTextFile(file: File): Promise<string> {
 
 function App() {
   const { language, setLanguage, tr } = useI18n()
+  const trRef = useRef(tr)
+  trRef.current = tr
   const [nodes, setNodes, onNodesChange] = useNodesState<ScientificFlowNode>([])
   const [edges, setEdges, onEdgesChange] = useEdgesState<ScientificFlowEdge>([])
   const [registry, setRegistry] = useState<Map<string, NodeDefinition>>(new Map())
   const [templateResponse, setTemplateResponse] = useState<TemplateResponse | null>(null)
+  const [workflowTemplates, setWorkflowTemplates] = useState<WorkflowTemplateCatalogItem[]>([])
+  const [workflowDraftSha256, setWorkflowDraftSha256] = useState<string | null>(null)
+  const [workflowRevisions, setWorkflowRevisions] = useState<WorkflowRevision[]>([])
+  const [workflowRunGraphs, setWorkflowRunGraphs] = useState<WorkflowRunGraph[]>([])
   const [capabilities, setCapabilities] = useState<Capabilities | null>(null)
   const [connectionState, setConnectionState] = useState<'loading' | 'online' | 'offline'>('loading')
   const [activeView, setActiveView] = useState<WorkspaceView>('workflow')
@@ -431,6 +454,7 @@ function App() {
   const [reactionAnalysis, setReactionAnalysis] = useState<ReactionAnalysis | null>(null)
   const [confirmRemoteWrite, setConfirmRemoteWrite] = useState(false)
   const [confirmSubmit, setConfirmSubmit] = useState(false)
+  const [confirmCancel, setConfirmCancel] = useState(false)
   const [confirmResultPull, setConfirmResultPull] = useState(false)
   const [busy, setBusy] = useState<string | null>(null)
   const [notice, setNotice] = useState<Notice>({
@@ -517,16 +541,26 @@ function App() {
       api.capabilities(),
       api.registry(),
       api.defaultTemplate(),
+      api.workflowTemplates(),
       api.projects(),
       api.paper4ReferenceCase(),
       api.reactionTemplates(),
     ])
-      .then(([capabilityPayload, definitions, templatePayload, projectPayload, referenceCase, templates]) => {
+      .then(([
+        capabilityPayload,
+        definitions,
+        templatePayload,
+        workflowTemplatePayload,
+        projectPayload,
+        referenceCase,
+        templates,
+      ]) => {
         if (cancelled) return
         const definitionMap = new Map(definitions.map((item) => [item.type_id, item]))
         setCapabilities(capabilityPayload)
         setRegistry(definitionMap)
         setTemplateResponse(templatePayload)
+        setWorkflowTemplates(workflowTemplatePayload)
         loadTemplate(templatePayload, definitionMap)
         setProjects(projectPayload)
         setPaper4Case(referenceCase)
@@ -540,14 +574,17 @@ function App() {
         setNotice({
           tone: 'error',
           message: error instanceof Error
-            ? tr(`本地 API 未连接：${error.message}`, `Local API unavailable: ${error.message}`)
-            : tr('本地 API 未连接。', 'Local API unavailable.'),
+            ? trRef.current(
+                `本地 API 未连接：${error.message}`,
+                `Local API unavailable: ${error.message}`,
+              )
+            : trRef.current('本地 API 未连接。', 'Local API unavailable.'),
         })
       })
     return () => {
       cancelled = true
     }
-  }, [bootstrapKey, loadTemplate, tr])
+  }, [bootstrapKey, loadTemplate])
 
   useEffect(() => {
     if (!capabilities || capabilities.chgnet) return
@@ -572,14 +609,26 @@ function App() {
     let cancelled = false
     Promise.all([
       api.projectArtifacts(currentProjectId),
-      api.projectWorkflow(currentProjectId),
+      api.projectWorkflowDraft(currentProjectId),
+      api.workflowRevisions(currentProjectId),
+      api.workflowRunGraphs(currentProjectId),
       api.projectCalculationConfig(currentProjectId),
       api.defaultCalculationConfig(),
       api.projectRuns(currentProjectId),
       api.reviewedEnergies(currentProjectId),
       api.calculationResults(currentProjectId),
     ])
-      .then(async ([projectArtifacts, savedWorkflow, savedConfig, defaultConfig, projectRuns, projectEnergies, projectResults]) => {
+      .then(async ([
+        projectArtifacts,
+        savedWorkflow,
+        projectWorkflowRevisions,
+        projectWorkflowRunGraphs,
+        savedConfig,
+        defaultConfig,
+        projectRuns,
+        projectEnergies,
+        projectResults,
+      ]) => {
         if (cancelled) return
         setArtifacts(projectArtifacts)
         const rememberedStructureId = localStorage.getItem(
@@ -599,13 +648,7 @@ function App() {
           setPoscarSource('')
           setStructureReady(false)
         }
-        const savedTypeIds = new Set(savedWorkflow?.nodes.map((node) => node.type_id) ?? [])
-        if (
-          savedWorkflow &&
-          savedTypeIds.has('hpc.connect') &&
-          savedTypeIds.has('slurm.submit') &&
-          !hasLegacyStructureWorkflowNodes(savedWorkflow.nodes)
-        ) {
+        if (savedWorkflow && !hasLegacyStructureWorkflowNodes(savedWorkflow.nodes)) {
           loadTemplate(
             {
               ...templateResponse,
@@ -618,7 +661,13 @@ function App() {
             registry,
             false,
           )
+          setWorkflowDraftSha256(savedWorkflow.draft_sha256)
+        } else {
+          loadTemplate(templateResponse, registry, false)
+          setWorkflowDraftSha256(null)
         }
+        setWorkflowRevisions(projectWorkflowRevisions)
+        setWorkflowRunGraphs(projectWorkflowRunGraphs)
         if (restoredStructure && latestStructure) {
           const inspectionStatus: RuntimeStatus =
             restoredStructure.inspection.status === 'error'
@@ -635,7 +684,7 @@ function App() {
                   data: {
                     ...node.data,
                     status: 'success',
-                    detail: tr(
+                    detail: trRef.current(
                       `${latestStructure.original_filename} · 已从项目恢复`,
                       `${latestStructure.original_filename} · restored from project`,
                     ),
@@ -650,7 +699,7 @@ function App() {
                     status: inspectionStatus,
                     detail: restoredStructure.inspection.record
                       ? `${restoredStructure.inspection.record.reduced_formula} · ${restoredStructure.inspection.record.num_sites} atoms`
-                      : tr('结构无法解析', 'Structure could not be parsed'),
+                      : trRef.current('结构无法解析', 'Structure could not be parsed'),
                   },
                 }
               }
@@ -690,14 +739,17 @@ function App() {
         if (!cancelled) {
           setNotice({
             tone: 'error',
-            message: error instanceof Error ? error.message : tr('项目恢复失败。', 'Failed to restore project.'),
+            message:
+              error instanceof Error
+                ? error.message
+                : trRef.current('项目恢复失败。', 'Failed to restore project.'),
           })
         }
       })
     return () => {
       cancelled = true
     }
-  }, [currentProjectId, loadTemplate, registry, setNodes, templateResponse, tr])
+  }, [currentProjectId, loadTemplate, registry, setNodes, templateResponse])
 
   const latestStructureArtifact = useMemo(
     () => selectActiveStructureArtifact(artifacts, activeStructureArtifactId) ?? null,
@@ -1694,36 +1746,40 @@ function App() {
     if (!files.length) return
     setBusy(`reaction-output:${stateKey}`)
     try {
-      const parsed = await api.parseVaspOutputFiles(files)
+      const document = await api.parseVaspResultFiles(files)
+      const parsed = document.vasp_output
       const candidates: Array<{
         kind: ReactionOutputImport['energyKind']
         value: number | null | undefined
       }> = [
-        { kind: 'sigma_zero', value: parsed.energy?.sigma_zero_energy_eV },
-        { kind: 'without_entropy', value: parsed.energy?.energy_without_entropy_eV },
-        { kind: 'free_energy', value: parsed.energy?.free_energy_eV },
+        { kind: 'sigma_zero', value: document.energy?.sigma_zero_energy_eV },
+        {
+          kind: 'without_entropy',
+          value: document.energy?.energy_without_entropy_eV,
+        },
+        { kind: 'free_energy', value: document.energy?.free_energy_eV },
       ]
       const selected = candidates.find((item) => item.value != null && Number.isFinite(item.value))
       if (!selected || selected.value == null) {
         throw new Error(tr(
-          '所选 OUTCAR/OSZICAR 中没有可用的最终能量。',
-          'No usable final energy was found in the selected OUTCAR/OSZICAR.',
+          '所选 VASP 结果文件中没有可用的最终能量。',
+          'No usable final energy was found in the selected VASP result files.',
         ))
       }
       const imported: ReactionOutputImport = {
-        filenames: parsed.upload?.filenames ?? files.map((file) => file.name),
+        filenames: document.upload?.filenames ?? files.map((file) => file.name),
         energyKind: selected.kind,
         energyEv: selected.value,
-        status: parsed.status,
-        scientificallyComplete: parsed.scientifically_complete,
-        ionicConvergence: parsed.convergence.ionic,
+        status: parsed?.status ?? 'metadata_only',
+        scientificallyComplete: parsed?.scientifically_complete ?? false,
+        ionicConvergence: parsed?.convergence.ionic ?? 'unknown',
       }
       setReactionOutputImports((current) => ({ ...current, [stateKey]: imported }))
       setReactionBindings((current) => withoutRecordKey(current, stateKey))
       setReactionEnergies((current) => ({ ...current, [stateKey]: String(selected.value) }))
       setReactionAnalysis(null)
       setNotice({
-        tone: parsed.scientifically_complete ? 'success' : 'warning',
+        tone: parsed?.scientifically_complete ? 'success' : 'warning',
         message: tr(
           `已从 ${imported.filenames.join(' + ')} 读取 ${selected.kind} 能量 ${selected.value.toFixed(6)} eV。`,
           `Read ${selected.kind} energy ${selected.value.toFixed(6)} eV from ${imported.filenames.join(' + ')}.`,
@@ -1802,15 +1858,14 @@ function App() {
   }, [activeReactionTemplate, calculationResults, h2Energy, h2oEnergy, reactionBindings, reactionCorrections, reactionEnergies, reactionPh, reactionPotential, reactionTemperature, reactionTemplateId, referenceElectrode, tr])
 
   const saveWorkflow = useCallback(async () => {
-    const payload: SavedWorkflow = {
-      schema_version: 'catex.web-local-workflow.v1',
-      nodes,
-      edges,
-    }
-    localStorage.setItem(STORAGE_KEY, JSON.stringify(payload))
     if (currentProject) {
       try {
-        await api.saveProjectWorkflow(currentProject.project_id, buildValidationRequest(nodes, edges))
+        const response = await api.saveProjectWorkflowDraft(
+          currentProject.project_id,
+          buildValidationRequest(nodes, edges),
+          workflowDraftSha256 ?? undefined,
+        )
+        setWorkflowDraftSha256(response.draft.draft_sha256)
         const refreshed = await api.projects()
         setProjects(refreshed)
         setCurrentProject(
@@ -1819,7 +1874,10 @@ function App() {
         )
         setNotice({
           tone: 'success',
-          message: tr('工作流已持久化到当前 CatEx 项目。', 'The workflow was persisted to the current CatEx project.'),
+          message: tr(
+            `工作流草稿第 ${response.draft.generation} 代已保存到当前项目。`,
+            `Workflow draft generation ${response.draft.generation} was saved to the current project.`,
+          ),
         })
         return
       } catch (error) {
@@ -1830,11 +1888,117 @@ function App() {
         return
       }
     }
+    const payload: SavedWorkflow = {
+      schema_version: 'catex.web-local-workflow.v1',
+      nodes,
+      edges,
+    }
+    localStorage.setItem(STORAGE_KEY, JSON.stringify(payload))
     setNotice({
       tone: 'success',
       message: tr('工作流布局已保存在当前浏览器。', 'The workflow layout was saved in this browser.'),
     })
-  }, [currentProject, edges, nodes, tr])
+  }, [currentProject, edges, nodes, tr, workflowDraftSha256])
+
+  const publishWorkflow = useCallback(async () => {
+    if (!currentProject) {
+      setNotice({
+        tone: 'error',
+        message: tr('请先创建或打开一个项目。', 'Create or open a project first.'),
+      })
+      return
+    }
+    setBusy('workflow-publish')
+    try {
+      const saved = await api.saveProjectWorkflowDraft(
+        currentProject.project_id,
+        buildValidationRequest(nodes, edges),
+        workflowDraftSha256 ?? undefined,
+      )
+      setWorkflowDraftSha256(saved.draft.draft_sha256)
+      const published = await api.publishWorkflowRevision(
+        currentProject.project_id,
+        `${currentProject.title} workflow`,
+      )
+      const revisions = await api.workflowRevisions(currentProject.project_id)
+      setWorkflowRevisions(revisions)
+      setNotice({
+        tone: 'success',
+        message: tr(
+          `已发布不可变版本 ${published.revision.revision_id}。`,
+          `Published immutable revision ${published.revision.revision_id}.`,
+        ),
+      })
+    } catch (error) {
+      setNotice({
+        tone: 'error',
+        message:
+          error instanceof Error
+            ? error.message
+            : tr('工作流发布失败。', 'Failed to publish the workflow.'),
+      })
+    } finally {
+      setBusy(null)
+    }
+  }, [currentProject, edges, nodes, tr, workflowDraftSha256])
+
+  const createWorkflowRunGraph = useCallback(async () => {
+    if (!currentProject || workflowRevisions.length === 0) return
+    setBusy('workflow-run-graph')
+    try {
+      const latest = workflowRevisions[0]
+      const runGraph = await api.createWorkflowRunGraph(
+        currentProject.project_id,
+        latest.revision_id,
+        `${currentProject.title} · ${new Date().toLocaleString()}`,
+      )
+      const executionPlan = await api.workflowExecutionPlan(
+        currentProject.project_id,
+        runGraph.run_graph_id,
+      )
+      setWorkflowRunGraphs((current) => [runGraph, ...current])
+      setNotice({
+        tone: 'success',
+        message: tr(
+          `运行快照 ${runGraph.run_graph_id} 已创建，共 ${executionPlan.stage_count} 个计算阶段；尚未连接或提交超算。`,
+          `Run snapshot ${runGraph.run_graph_id} was created with ${executionPlan.stage_count} calculation stage(s); no HPC connection or submission occurred.`,
+        ),
+      })
+    } catch (error) {
+      setNotice({
+        tone: 'error',
+        message:
+          error instanceof Error
+            ? error.message
+            : tr('运行快照创建失败。', 'Failed to create the run snapshot.'),
+      })
+    } finally {
+      setBusy(null)
+    }
+  }, [currentProject, tr, workflowRevisions])
+
+  const applyWorkflowTemplate = useCallback(
+    (template: WorkflowTemplateCatalogItem) => {
+      if (registry.size === 0) return
+      loadTemplate(
+        {
+          template,
+          validation: template.validation,
+        },
+        registry,
+        false,
+      )
+      if (!currentProject) setWorkflowDraftSha256(null)
+      setNotice({
+        tone: 'neutral',
+        message: tr(
+          `已载入“${template.title}”模板；保存前仍可继续编辑。`,
+          `Loaded the “${localizeWorkflowTemplate(template, 'en').title}” template; it remains editable until saved.`,
+        ),
+      })
+    },
+    [currentProject, loadTemplate, registry, tr],
+  )
 
   const createProject = useCallback(async () => {
     setBusy('project')
@@ -2331,6 +2495,37 @@ function App() {
     }
   }, [currentProject, hpcProfile, selectedRun, tr])
 
+  const cancelRemoteRun = useCallback(async () => {
+    if (!currentProject || !selectedRun) return
+    setBusy('hpc-cancel')
+    try {
+      const response = await api.cancelRemoteRun(
+        currentProject.project_id,
+        hpcProfile,
+        selectedRun.run_id,
+        confirmCancel,
+      )
+      setConfirmCancel(false)
+      setNotice({
+        tone: 'warning',
+        message: tr(
+          `已向 Slurm 请求取消作业 ${response.job_id}；远端计算文件没有被修改或删除，请刷新调度状态确认结果。`,
+          `Cancellation was requested for Slurm job ${response.job_id}. No remote calculation files were modified or deleted; refresh the scheduler state to confirm.`,
+        ),
+      })
+    } catch (error) {
+      setNotice({
+        tone: 'error',
+        message:
+          error instanceof Error
+            ? error.message
+            : tr('作业取消请求失败。', 'Failed to request job cancellation.'),
+      })
+    } finally {
+      setBusy(null)
+    }
+  }, [confirmCancel, currentProject, hpcProfile, selectedRun, tr])
+
   const pullRemoteResults = useCallback(async () => {
     if (!currentProject || !selectedRun) return
     setBusy('hpc-pull')
@@ -2471,82 +2666,34 @@ function App() {
   )
 
   const renderWorkflow = () => (
-    <section className="canvas-card">
-      <div className="canvas-toolbar">
-        <div>
-          <span className="eyebrow">ADVANCED GRAPH</span>
-          <h2>{tr('结构到计算结果', 'Structure to calculation results')}</h2>
-        </div>
-        <div className="toolbar-actions">
-          <button className="ghost-button" onClick={() => void validateCurrentWorkflow()} type="button">
-            <ShieldCheck size={15} /> {tr('校验', 'Validate')}
-          </button>
-          <button className="ghost-button" onClick={() => void saveWorkflow()} type="button">
-            <Save size={15} /> {tr('保存布局', 'Save layout')}
-          </button>
-          <button className="ghost-button" onClick={resetWorkflow} type="button">
-            <RotateCcw size={15} /> {tr('重置', 'Reset')}
-          </button>
-        </div>
-      </div>
-      <div className="workflow-canvas">
-        {connectionState !== 'online' ? (
-          <div className="connection-empty">
-            {connectionState === 'loading' ? (
-              <LoaderCircle className="spin" size={28} />
-            ) : (
-              <ServerOff size={32} />
-            )}
-            <strong>{connectionState === 'loading' ? tr('正在连接本地 API', 'Connecting to local API') : tr('本地 API 未启动', 'Local API is offline')}</strong>
-            <span>{tr('后端只需监听 127.0.0.1:8000', 'The backend only needs to listen on 127.0.0.1:8000')}</span>
-            {connectionState === 'offline' && (
-              <button onClick={() => setBootstrapKey((value) => value + 1)} type="button">
-                <RefreshCw size={14} /> {tr('重试', 'Retry')}
-              </button>
-            )}
-          </div>
-        ) : (
-          <ReactFlow
-            colorMode="dark"
-            defaultEdgeOptions={{ type: 'smoothstep' }}
-            edges={edges}
-            fitView
-            fitViewOptions={{ padding: 0.18 }}
-            isValidConnection={(connection) =>
-              compatibleHandles(connection.sourceHandle ?? null, connection.targetHandle ?? null)
-            }
-            maxZoom={1.35}
-            minZoom={0.28}
-            nodeTypes={nodeTypes}
-            nodes={nodes}
-            onConnect={onConnect}
-            onEdgesChange={onEdgesChange}
-            onNodeClick={(_, node) => setSelectedNodeId(node.id)}
-            onNodeDoubleClick={(_, node) => {
-              setSelectedNodeId(node.id)
-              setActiveView(NODE_VIEW[node.data.definition.type_id] ?? 'workflow')
-            }}
-            onNodesChange={onNodesChange}
-          >
-            <Background color="#27423a" gap={22} size={1} />
-            <Controls position="bottom-left" showInteractive={false} />
-            <MiniMap
-              maskColor="rgba(5, 14, 12, 0.78)"
-              nodeColor={(node) =>
-                node.data?.status === 'success'
-                  ? '#57c9a2'
-                  : node.data?.status === 'blocked'
-                    ? '#db6b67'
-                    : '#5c776f'
-              }
-              pannable
-              position="bottom-right"
-              zoomable
-            />
-          </ReactFlow>
-        )}
-      </div>
-    </section>
+    <WorkflowWorkbench
+      connectionState={connectionState}
+      edges={edges}
+      nodes={nodes}
+      onApplyTemplate={applyWorkflowTemplate}
+      onConnect={onConnect}
+      onCreateRunGraph={() => void createWorkflowRunGraph()}
+      onEdgesChange={onEdgesChange}
+      onNodesChange={onNodesChange}
+      onOpenNode={(node) => {
+        setSelectedNodeId(node.id)
+        setActiveView(NODE_VIEW[node.data.definition.type_id] ?? 'workflow')
+      }}
+      onPublish={() => void publishWorkflow()}
+      onReset={resetWorkflow}
+      onRetry={() => setBootstrapKey((value) => value + 1)}
+      onSave={() => void saveWorkflow()}
+      onSelectNode={setSelectedNodeId}
+      onValidate={() => void validateCurrentWorkflow()}
+      projectReady={Boolean(currentProject)}
+      registry={registry}
+      revisions={workflowRevisions}
+      runGraphs={workflowRunGraphs}
+      selectedNodeId={selectedNodeId}
+      setEdges={setEdges}
+      setNodes={setNodes}
+      templates={workflowTemplates}
+    />
   )
 
   const renderStructure = () => (
@@ -3364,8 +3511,38 @@ function App() {
               </section>
               <section>
                 <strong>{tr('3. 只读观测', '3. Read-only observation')}</strong>
-                <p>{tr('仅运行固定字段的 squeue / sacct，不提供取消、删除或自动续算。', 'Only fixed-field squeue/sacct commands are available; no cancel, delete, or automatic restart.')}</p>
+                <p>{tr(
+                  '固定字段读取 squeue / sacct；失败会分类并给出人工续算建议，但不会自动修改科学参数或重新提交。',
+                  'Fixed-field squeue/sacct reads classify failures and provide reviewed restart guidance without changing scientific parameters or resubmitting automatically.',
+                )}</p>
                 <button disabled={!hpcConnected || !selectedRun || !(hpcJobId || selectedRun.job_id) || busy !== null} onClick={() => void observeRemoteRun()} type="button">{tr('刷新调度状态', 'Refresh scheduler state')}</button>
+                <label className="confirmation-row">
+                  <input
+                    checked={confirmCancel}
+                    onChange={(event) => setConfirmCancel(event.target.checked)}
+                    type="checkbox"
+                  />
+                  {tr(
+                    '确认只取消当前绑定的 Slurm 作业；不删除远端文件。',
+                    'Cancel only the currently bound Slurm job without deleting remote files.',
+                  )}
+                </label>
+                <button
+                  className="danger-button"
+                  disabled={
+                    !hpcConnected ||
+                    !selectedRun ||
+                    !(hpcJobId || selectedRun.job_id) ||
+                    selectedRun.cancellation_requested ||
+                    hpcObservation?.report.observation?.terminal === true ||
+                    !confirmCancel ||
+                    busy !== null
+                  }
+                  onClick={() => void cancelRemoteRun()}
+                  type="button"
+                >
+                  {tr('请求取消当前作业', 'Request job cancellation')}
+                </button>
               </section>
               <section>
                 <strong>{tr('4. 拉取并解析', '4. Pull and parse')}</strong>
@@ -3549,6 +3726,28 @@ function App() {
           </article>
         </div>
 
+        {remoteResult?.restart_assessment && (
+          <article className="restart-assessment-card">
+            <div>
+              <span className="eyebrow">FAILURE & RESTART ASSESSMENT</span>
+              <h3>
+                {tr(
+                  `续算结论：${remoteResult.restart_assessment.status}`,
+                  `Restart assessment: ${remoteResult.restart_assessment.status}`,
+                )}
+              </h3>
+              <p>
+                {remoteResult.restart_assessment.failure_categories.length
+                  ? remoteResult.restart_assessment.failure_categories.join(' · ')
+                  : tr('没有检测到需要续算的失败类别。', 'No restart failure category was detected.')}
+              </p>
+            </div>
+            <span className="safety-chip">
+              {tr('不会自动改参数或提交', 'No automatic parameter change or submission')}
+            </span>
+          </article>
+        )}
+
         {result?.vibrations && (
           <article className="vibration-panel">
             <div className="card-heading"><div><span className="eyebrow">VIBRATIONAL THERMOCHEMISTRY</span><h3>{tr('振动频率与热化学校正', 'Frequencies and thermochemical correction')}</h3></div><span className={result.vibrations.imaginary_mode_count ? 'warning-chip' : 'success-chip'}>{result.vibrations.imaginary_mode_count} {tr('个虚频', 'imaginary')}</span></div>
@@ -3580,6 +3779,7 @@ function App() {
       <div className="analysis-layout">
         <article className="analysis-form-card">
           <input
+            accept=".xml,OUTCAR,OSZICAR,CONTCAR,XDATCAR,CHGCAR,LOCPOT,ELFCAR"
             hidden
             multiple
             onChange={(event) => {
@@ -3596,8 +3796,8 @@ function App() {
             <div>
               <strong>{tr('计算结果能量', 'Calculation-result energies')}</strong>
               <span>{tr(
-                `当前项目可绑定 ${calculationResults.length} 条结果；也可给每个状态上传 OUTCAR/OSZICAR。`,
-                `${calculationResults.length} project result(s) can be bound; OUTCAR/OSZICAR can also be uploaded per state.`,
+                `当前项目可绑定 ${calculationResults.length} 条结果；也可上传 OUTCAR、vasprun.xml 等 VASP 结果文件。`,
+                `${calculationResults.length} project result(s) can be bound; OUTCAR, vasprun.xml, and other VASP result files can also be uploaded.`,
               )}</span>
             </div>
             <button className="secondary-button" disabled={busy !== null || !currentProject} onClick={() => void refreshReactionResults()} type="button">
@@ -3900,6 +4100,14 @@ function App() {
           {activeView === 'runs' && renderRuns()}
           {activeView === 'results' && renderResults()}
           {activeView === 'analysis' && renderAnalysis()}
+          {activeView === 'campaigns' && (
+            <CampaignWorkbench
+              artifacts={artifacts}
+              onMessage={(tone, message) => setNotice({ tone, message })}
+              projectId={currentProjectId}
+              revisions={workflowRevisions}
+            />
+          )}
         </div>
       </main>
 

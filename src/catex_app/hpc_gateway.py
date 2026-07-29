@@ -101,6 +101,8 @@ class HpcGateway(Protocol):
         self, profile: HpcConnectionProfile, run_id: str, job_id: str
     ) -> dict[str, Any]: ...
 
+    def cancel(self, profile: HpcConnectionProfile, run_id: str, job_id: str) -> dict[str, Any]: ...
+
     def download_results(
         self,
         profile: HpcConnectionProfile,
@@ -482,6 +484,33 @@ class ParamikoHpcGateway:
             }
         finally:
             client.close()
+
+    def cancel(
+        self,
+        profile: HpcConnectionProfile,
+        run_id: str,
+        job_id: str,
+    ) -> dict[str, Any]:
+        """Cancel one validated allocation after the application approval gate."""
+
+        profile.remote_job_directory(run_id)
+        if _JOB_ID.fullmatch(job_id) is None:
+            raise ValueError("job_id has an invalid format")
+        command = shlex.join(["scancel", job_id])
+        client = self._connect(profile)
+        try:
+            output = self._exec(client, command, maximum=4096)
+        finally:
+            client.close()
+        return {
+            "schema_version": "catex.hpc-cancellation.v1",
+            "run_id": run_id,
+            "job_id": job_id,
+            "command_output_sha256": hashlib.sha256(output).hexdigest(),
+            "cancellation_requested": True,
+            "remote_files_modified": False,
+            "remote_files_deleted": False,
+        }
 
     def download_results(
         self,

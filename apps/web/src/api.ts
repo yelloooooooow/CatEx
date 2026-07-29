@@ -3,10 +3,14 @@ import type {
   CalculationConfig,
   CalculationResult,
   CalculationPlanResponse,
+  CampaignCandidate,
+  CampaignDecision,
+  CampaignRecord,
   ChgnetPreRelaxationConfig,
   ChgnetPreRelaxationResponse,
   CifConversionResponse,
   EnergyDerivation,
+  HpcCancellationReceipt,
   HpcObservation,
   HpcProfile,
   HarmonicThermochemistry,
@@ -29,7 +33,13 @@ import type {
   StructureReview,
   TemplateResponse,
   VaspDemoResult,
+  VaspResultDocument,
   WorkflowValidation,
+  WorkflowDraft,
+  WorkflowExecutionPlan,
+  WorkflowRevision,
+  WorkflowRunGraph,
+  WorkflowTemplateCatalogItem,
 } from './types'
 import type { WorkflowValidationRequest } from './workflow'
 
@@ -37,7 +47,14 @@ async function requestJson<T>(url: string, init?: RequestInit): Promise<T> {
   const response = await fetch(url, init)
   if (!response.ok) {
     const detail = await response.json().catch(() => null)
-    throw new Error(detail?.detail ?? `Request failed (${response.status})`)
+    const value = detail?.detail
+    const message =
+      typeof value === 'string'
+        ? value
+        : typeof value?.message === 'string'
+          ? value.message
+          : `Request failed (${response.status})`
+    throw new Error(message)
   }
   return response.json() as Promise<T>
 }
@@ -50,6 +67,12 @@ export const api = {
   },
   defaultTemplate: () =>
     requestJson<TemplateResponse>('/api/v1/workflows/templates/default'),
+  workflowTemplates: async () => {
+    const payload = await requestJson<{ templates: WorkflowTemplateCatalogItem[] }>(
+      '/api/v1/workflows/templates',
+    )
+    return payload.templates
+  },
   validateWorkflow: (payload: WorkflowValidationRequest) =>
     requestJson<WorkflowValidation>('/api/v1/workflows/validate', {
       method: 'POST',
@@ -86,6 +109,14 @@ export const api = {
     const form = new FormData()
     for (const file of files) form.append('files', file)
     return requestJson<VaspDemoResult>('/api/v1/vasp-output/parse', {
+      method: 'POST',
+      body: form,
+    })
+  },
+  parseVaspResultFiles: (files: File[]) => {
+    const form = new FormData()
+    for (const file of files) form.append('files', file)
+    return requestJson<VaspResultDocument>('/api/v1/vasp-results/parse', {
       method: 'POST',
       body: form,
     })
@@ -180,6 +211,134 @@ export const api = {
   saveProjectWorkflow: (projectId: string, payload: WorkflowValidationRequest) =>
     requestJson<{ workflow: SavedWorkflowPayload; validation: WorkflowValidation }>(
       `/api/v1/projects/${projectId}/workflow`,
+      {
+        method: 'POST',
+        headers: { 'content-type': 'application/json' },
+        body: JSON.stringify(payload),
+      },
+    ),
+  projectWorkflowDraft: async (projectId: string) => {
+    const payload = await requestJson<{ draft: WorkflowDraft | null }>(
+      `/api/v1/projects/${projectId}/workflow/draft`,
+    )
+    return payload.draft
+  },
+  saveProjectWorkflowDraft: (
+    projectId: string,
+    payload: WorkflowValidationRequest,
+    expectedDraftSha256?: string,
+  ) =>
+    requestJson<{ draft: WorkflowDraft; validation: WorkflowValidation }>(
+      `/api/v1/projects/${projectId}/workflow/draft`,
+      {
+        method: 'PUT',
+        headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({
+          ...payload,
+          ...(expectedDraftSha256
+            ? { expected_draft_sha256: expectedDraftSha256 }
+            : {}),
+        }),
+      },
+    ),
+  workflowRevisions: async (projectId: string) => {
+    const payload = await requestJson<{ revisions: WorkflowRevision[] }>(
+      `/api/v1/projects/${projectId}/workflow/revisions`,
+    )
+    return payload.revisions
+  },
+  publishWorkflowRevision: (projectId: string, title: string, note = '') =>
+    requestJson<{ revision: WorkflowRevision; validation: WorkflowValidation }>(
+      `/api/v1/projects/${projectId}/workflow/revisions`,
+      {
+        method: 'POST',
+        headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({ title, note }),
+      },
+    ),
+  workflowRunGraphs: async (projectId: string) => {
+    const payload = await requestJson<{ run_graphs: WorkflowRunGraph[] }>(
+      `/api/v1/projects/${projectId}/workflow/run-graphs`,
+    )
+    return payload.run_graphs
+  },
+  createWorkflowRunGraph: (
+    projectId: string,
+    revisionId: string,
+    label: string,
+  ) =>
+    requestJson<WorkflowRunGraph>(
+      `/api/v1/projects/${projectId}/workflow/run-graphs`,
+      {
+        method: 'POST',
+        headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({
+          revision_id: revisionId,
+          label,
+          bindings: {},
+        }),
+      },
+    ),
+  workflowExecutionPlan: async (projectId: string, runGraphId: string) => {
+    const payload = await requestJson<{ plan: WorkflowExecutionPlan }>(
+      `/api/v1/projects/${projectId}/workflow/run-graphs/${runGraphId}/execution-plan`,
+    )
+    return payload.plan
+  },
+  campaigns: async (projectId: string) => {
+    const payload = await requestJson<{ campaigns: CampaignRecord[] }>(
+      `/api/v1/projects/${projectId}/campaigns`,
+    )
+    return payload.campaigns
+  },
+  createCampaign: (
+    projectId: string,
+    payload: {
+      title: string
+      objective: string
+      workflow_revision_id?: string
+    },
+  ) =>
+    requestJson<CampaignRecord>(`/api/v1/projects/${projectId}/campaigns`, {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify(payload),
+    }),
+  campaignDetail: (projectId: string, campaignId: string) =>
+    requestJson<{
+      campaign: CampaignRecord
+      candidates: CampaignCandidate[]
+      decisions: CampaignDecision[]
+    }>(`/api/v1/projects/${projectId}/campaigns/${campaignId}`),
+  addCampaignCandidate: (
+    projectId: string,
+    campaignId: string,
+    payload: {
+      label: string
+      structure_artifact_id?: string
+      variables: Record<string, unknown>
+    },
+  ) =>
+    requestJson<CampaignCandidate>(
+      `/api/v1/projects/${projectId}/campaigns/${campaignId}/candidates`,
+      {
+        method: 'POST',
+        headers: { 'content-type': 'application/json' },
+        body: JSON.stringify(payload),
+      },
+    ),
+  recordCampaignDecision: (
+    projectId: string,
+    campaignId: string,
+    payload: {
+      action: string
+      rationale: string
+      candidate_id?: string
+      evidence?: Record<string, unknown>
+    },
+  ) =>
+    requestJson<CampaignDecision>(
+      `/api/v1/projects/${projectId}/campaigns/${campaignId}/decisions`,
       {
         method: 'POST',
         headers: { 'content-type': 'application/json' },
@@ -307,6 +466,24 @@ export const api = {
       headers: { 'content-type': 'application/json' },
       body: JSON.stringify({ profile, run_id: runId }),
     }),
+  cancelRemoteRun: (
+    projectId: string,
+    profile: HpcProfile,
+    runId: string,
+    approvedCancel: boolean,
+  ) =>
+    requestJson<HpcCancellationReceipt>(
+      `/api/v1/projects/${projectId}/remote-cancel`,
+      {
+        method: 'POST',
+        headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({
+          profile,
+          run_id: runId,
+          approved_cancel: approvedCancel,
+        }),
+      },
+    ),
   pullRemoteResults: (
     projectId: string,
     profile: HpcProfile,

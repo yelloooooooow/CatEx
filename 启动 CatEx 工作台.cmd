@@ -15,7 +15,7 @@ if errorlevel 1 (
     exit /b 1
 )
 
-node.exe "%~dp0scripts\start_web_poc.mjs" %*
+node.exe "%~dp0scripts\start_catex.mjs" %*
 set "CATEX_EXIT=%ERRORLEVEL%"
 
 if not "%CATEX_EXIT%"=="0" (
