@@ -29,6 +29,10 @@ web = [
 hpc = [
   "paramiko>=3.5,<5",
 ]
+mlip = [
+  "ase>=3.26,<4",
+  "chgnet>=0.4,<1",
+]
 dev = [
   "build>=1.2",
   "httpx>=0.28,<1",
@@ -51,6 +55,7 @@ include = [
   "/docs/SCHEMAS.md",
   "/docs/VASP_INPUT_VALIDATION.md",
   "/docs/VASP_OUTPUT_PARSING.md",
+  "/docs/CHGNET_PRE_RELAXATION.md",
   "/docs/MATERIALS_STUDIO_ADAPTER.md",
   "/docs/PROTOCOL_AND_SLURM_DRY_RUN.md",
   "/docs/HPC_POTCAR_METADATA.md",

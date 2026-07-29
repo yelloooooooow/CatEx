@@ -3,6 +3,8 @@ import type {
   CalculationConfig,
   CalculationResult,
   CalculationPlanResponse,
+  ChgnetPreRelaxationConfig,
+  ChgnetPreRelaxationResponse,
   CifConversionResponse,
   EnergyDerivation,
   HpcObservation,
@@ -80,6 +82,14 @@ export const api = {
       headers: { 'content-type': 'application/json' },
       body: JSON.stringify(payload),
     }),
+  parseVaspOutputFiles: (files: File[]) => {
+    const form = new FormData()
+    for (const file of files) form.append('files', file)
+    return requestJson<VaspDemoResult>('/api/v1/vasp-output/parse', {
+      method: 'POST',
+      body: form,
+    })
+  },
   projects: async () => {
     const payload = await requestJson<{ projects: ProjectRecord[] }>('/api/v1/projects')
     return payload.projects
@@ -118,6 +128,27 @@ export const api = {
       body: form,
     })
   },
+  runChgnetPreRelaxation: (
+    projectId: string,
+    artifactId: string,
+    config: ChgnetPreRelaxationConfig,
+  ) =>
+    requestJson<ChgnetPreRelaxationResponse>(
+      `/api/v1/projects/${projectId}/chgnet-pre-relaxations`,
+      {
+        method: 'POST',
+        headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({
+          artifact_id: artifactId,
+          model_name: config.model_name,
+          optimizer: config.optimizer,
+          fmax_eV_per_angstrom: config.fmax_eV_per_angstrom,
+          max_steps: config.max_steps,
+          relax_cell: config.relax_cell,
+          device: config.device,
+        }),
+      },
+    ),
   projectStructureReview: async (projectId: string, artifactId: string) => {
     const payload = await requestJson<{ review: StructureReview | null }>(
       `/api/v1/projects/${projectId}/structure-reviews/${artifactId}`,

@@ -402,7 +402,7 @@ class ProjectStore:
             for path in sorted((directory / "artifacts").iterdir()):
                 if path.is_file():
                     bundle.write(path, f"artifacts/{path.name}")
-            for folder in ("reviews", "config", "runs", "analysis"):
+            for folder in ("reviews", "config", "runs", "analysis", "pre-relaxations"):
                 root = directory / folder
                 if not root.is_dir():
                     continue

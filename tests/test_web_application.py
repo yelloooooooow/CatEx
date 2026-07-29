@@ -25,8 +25,11 @@ def test_default_workflow_is_typed_and_valid() -> None:
     report = validate_workflow(template.nodes, template.edges)
 
     assert report.valid
-    assert template.nodes[0].type_id == "structure.upload"
+    assert template.nodes[0].type_id == "hpc.connect"
     assert template.nodes[-1].type_id == "results.summarize"
+    assert {node.type_id for node in template.nodes}.isdisjoint(
+        {"structure.upload", "structure.inspect"}
+    )
     assert PortKind.STRUCTURE_ARTIFACT.value == "structure_artifact"
 
 
@@ -35,8 +38,8 @@ def test_workflow_rejects_type_mismatch() -> None:
     invalid = WorkflowEdge(
         edge_id="bad-edge",
         source_node_id="node-1",
-        source_port_id="structure",
-        target_node_id="node-5",
+        source_port_id="context",
+        target_node_id="node-3",
         target_port_id="input",
     )
 

@@ -72,14 +72,14 @@ def reaction_templates() -> list[dict[str, Any]]:
             "template_id": "her-che",
             "name": "Hydrogen evolution reaction (CHE)",
             "state_keys": ["slab", "h_star"],
-            "state_labels": ["*", "H*", "H₂"],
+            "state_labels": ["slab", "H*", "slab"],
             "reservoir_keys": ["h2"],
         },
         {
             "template_id": "oer-aem-che",
             "name": "Oxygen evolution · adsorbate evolution mechanism (CHE)",
             "state_keys": ["slab", "oh_star", "o_star", "ooh_star"],
-            "state_labels": ["*", "OH*", "O*", "OOH*", "O₂"],
+            "state_labels": ["slab", "OH*", "O*", "OOH*", "slab"],
             "reservoir_keys": ["h2", "h2o"],
         },
     ]
@@ -136,7 +136,7 @@ def analyze_electrocatalysis(
     if template_id == "her-che":
         delta_h = corrected("h_star") - g_slab - 0.5 * h2_free_energy_ev
         standard = (0.0, delta_h, 0.0)
-        labels = (("slab", "*"), ("h_star", "H*"), ("h2", "H₂"))
+        labels = (("slab", "slab"), ("h_star", "H*"), ("slab_final", "slab"))
         # Reduction steps gain +eU in this CHE sign convention.
         shift = potential_volts + ph_shift
         adjusted = tuple(value + index * shift for index, value in enumerate(standard))
@@ -153,11 +153,11 @@ def analyze_electrocatalysis(
         )
         standard = (0.0, delta_oh, delta_o, delta_ooh, oer_equilibrium_free_energy_ev)
         labels = (
-            ("slab", "*"),
+            ("slab", "slab"),
             ("oh_star", "OH*"),
             ("o_star", "O*"),
             ("ooh_star", "OOH*"),
-            ("o2", "O₂"),
+            ("slab_final", "slab"),
         )
         # Each oxidative PCET becomes more favorable by eU (and by pH on SHE).
         shift = potential_volts + ph_shift
