@@ -11,7 +11,10 @@ const repositoryRoot = resolve(scriptDirectory, '..')
 const webRoot = join(repositoryRoot, 'apps', 'web')
 const webDist = join(webRoot, 'dist', 'index.html')
 const portArgument = process.argv.find((argument) => argument.startsWith('--port='))
-const port = Number(portArgument?.slice('--port='.length) ?? '8000')
+// Keep CatEx away from the common FastAPI/CatGo development port. A stale
+// CatGo browser tab pointed at :8000 otherwise sends its own /api/workflow/*
+// requests to CatEx and creates a misleading stream of 404 responses.
+const port = Number(portArgument?.slice('--port='.length) ?? '8765')
 const keepAliveArgument = process.argv.find((argument) =>
   argument.startsWith('--keep-alive-seconds='),
 )

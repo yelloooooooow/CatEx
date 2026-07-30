@@ -14,6 +14,7 @@ import {
   ChevronDown,
   ChevronRight,
   ChartNoAxesCombined,
+  Copy,
   Database,
   FileCheck2,
   FileUp,
@@ -48,7 +49,7 @@ import { StructureViewer } from './components/StructureViewer'
 import {
   localizeWorkflowTemplate,
   WorkflowWorkbench,
-} from './components/WorkflowWorkbench'
+} from './components/WorkflowStudio'
 import { localizeNodeDefinition, useI18n } from './i18n'
 import {
   canResumeExistingRun,
@@ -101,6 +102,7 @@ import type {
 import {
   buildValidationRequest,
   compatibleHandles,
+  localProjectDirectory,
   rehydrateNodes,
   templateEdgeToFlow,
   templateNodeToFlow,
@@ -359,8 +361,9 @@ function App() {
   const [workflowRunGraphs, setWorkflowRunGraphs] = useState<WorkflowRunGraph[]>([])
   const [capabilities, setCapabilities] = useState<Capabilities | null>(null)
   const [connectionState, setConnectionState] = useState<'loading' | 'online' | 'offline'>('loading')
-  const [activeView, setActiveView] = useState<WorkspaceView>('workflow')
+  const [activeView, setActiveView] = useState<WorkspaceView>('projects')
   const [selectedNodeId, setSelectedNodeId] = useState<string | null>(null)
+  const [workflowInitialized, setWorkflowInitialized] = useState(false)
   const [structure, setStructure] = useState<StructureInspectionResponse | null>(null)
   const [result, setResult] = useState<VaspDemoResult | null>(null)
   const [structureReady, setStructureReady] = useState(false)
@@ -473,6 +476,10 @@ function App() {
   const reactionUploadTargetRef = useRef<string | null>(null)
   const languageMenuRef = useRef<HTMLDivElement>(null)
   const currentProjectId = currentProject?.project_id ?? null
+  const currentProjectStoragePath = localProjectDirectory(
+    capabilities?.persistent_storage_root,
+    currentProjectId,
+  )
 
   useEffect(() => {
     setReviewNote((current) => {
@@ -561,7 +568,10 @@ function App() {
         setRegistry(definitionMap)
         setTemplateResponse(templatePayload)
         setWorkflowTemplates(workflowTemplatePayload)
-        loadTemplate(templatePayload, definitionMap)
+        setNodes([])
+        setEdges([])
+        setSelectedNodeId(null)
+        setWorkflowInitialized(false)
         setProjects(projectPayload)
         setPaper4Case(referenceCase)
         setReactionTemplates(templates)
@@ -584,7 +594,7 @@ function App() {
     return () => {
       cancelled = true
     }
-  }, [bootstrapKey, loadTemplate])
+  }, [bootstrapKey, setEdges, setNodes])
 
   useEffect(() => {
     if (!capabilities || capabilities.chgnet) return
@@ -662,9 +672,13 @@ function App() {
             false,
           )
           setWorkflowDraftSha256(savedWorkflow.draft_sha256)
+          setWorkflowInitialized(true)
         } else {
-          loadTemplate(templateResponse, registry, false)
+          setNodes([])
+          setEdges([])
+          setSelectedNodeId(null)
           setWorkflowDraftSha256(null)
+          setWorkflowInitialized(false)
         }
         setWorkflowRevisions(projectWorkflowRevisions)
         setWorkflowRunGraphs(projectWorkflowRunGraphs)
@@ -749,7 +763,7 @@ function App() {
     return () => {
       cancelled = true
     }
-  }, [currentProjectId, loadTemplate, registry, setNodes, templateResponse])
+  }, [currentProjectId, loadTemplate, registry, setEdges, setNodes, templateResponse])
 
   const latestStructureArtifact = useMemo(
     () => selectActiveStructureArtifact(artifacts, activeStructureArtifactId) ?? null,
@@ -1988,6 +2002,7 @@ function App() {
         registry,
         false,
       )
+      setWorkflowInitialized(true)
       if (!currentProject) setWorkflowDraftSha256(null)
       setNotice({
         tone: 'neutral',
@@ -2014,6 +2029,7 @@ function App() {
       const refreshed = await api.projects()
       setProjects(refreshed)
       setCurrentProject(created)
+      setWorkflowInitialized(false)
       setActiveView('workflow')
       setNotice({
         tone: 'success',
@@ -2039,6 +2055,8 @@ function App() {
       const refreshed = await api.projects()
       setProjects(refreshed)
       setCurrentProject(created)
+      setWorkflowInitialized(false)
+      setActiveView('workflow')
       setNotice({
         tone: 'warning',
         message: tr(
@@ -2058,32 +2076,39 @@ function App() {
 
   const selectProject = useCallback((project: ProjectRecord) => {
     setCurrentProject(project)
+    setWorkflowInitialized(false)
     setStructureReady(false)
     setResult(null)
     setResultReviewed(false)
+    setActiveView('workflow')
     setNotice({
       tone: 'neutral',
       message: tr(`已打开项目“${project.title}”。`, `Opened project “${project.title}”.`),
     })
   }, [tr])
 
-  const resetWorkflow = useCallback(() => {
-    if (!templateResponse || registry.size === 0) return
-    localStorage.removeItem(STORAGE_KEY)
-    loadTemplate(templateResponse, registry, false)
-    setStructure(null)
-    setPoscarSource('')
-    setChgnetResult(null)
-    setChgnetConfirmed(false)
-    setImportedInputNames({ incar: '', kpoints: '', potcar: '' })
-    setResult(null)
-    setStructureReady(false)
-    setResultReviewed(false)
+  const clearWorkflowCanvas = useCallback(() => {
+    if (
+      nodes.length > 0 &&
+      !window.confirm(
+        tr(
+          '这会清空当前画布中的节点和连线，但不会删除项目文件或已发布版本。是否继续？',
+          'This clears nodes and edges from the current canvas, but does not delete project files or published revisions. Continue?',
+        ),
+      )
+    ) return
+    setNodes([])
+    setEdges([])
+    setSelectedNodeId(null)
+    setWorkflowInitialized(true)
     setNotice({
       tone: 'neutral',
-      message: tr('已恢复只读 POC 默认模板。', 'The read-only default POC template was restored.'),
+      message: tr(
+        '当前画布已清空；项目文件和已发布版本未被删除。',
+        'The current canvas was cleared; project files and published revisions were not deleted.',
+      ),
     })
-  }, [loadTemplate, registry, templateResponse, tr])
+  }, [nodes.length, setEdges, setNodes, tr])
 
   const validateCurrentWorkflow = useCallback(async () => {
     try {
@@ -2575,6 +2600,31 @@ function App() {
           </a>
         )}
       </div>
+      {capabilities?.persistent_storage_root && (
+        <article className="project-storage-card">
+          <div>
+            <FolderOpen size={19} />
+            <span>
+              <strong>{tr('本地项目保存位置', 'Local project storage')}</strong>
+              <code>
+                {currentProjectStoragePath ||
+                  `${capabilities.persistent_storage_root}${capabilities.persistent_storage_root.includes('\\') ? '\\' : '/'}projects`}
+              </code>
+            </span>
+          </div>
+          <button
+            className="secondary-button"
+            onClick={() =>
+              void navigator.clipboard.writeText(
+                currentProjectStoragePath ||
+                  `${capabilities.persistent_storage_root}${capabilities.persistent_storage_root.includes('\\') ? '\\' : '/'}projects`,
+              )}
+            type="button"
+          >
+            <Copy size={14} /> {tr('复制路径', 'Copy path')}
+          </button>
+        </article>
+      )}
       <div className="project-grid">
         <article className="project-create-card">
           <span className="eyebrow">NEW PROJECT</span>
@@ -2674,18 +2724,34 @@ function App() {
       onConnect={onConnect}
       onCreateRunGraph={() => void createWorkflowRunGraph()}
       onEdgesChange={onEdgesChange}
+      onInitializeBlank={() => {
+        setNodes([])
+        setEdges([])
+        setSelectedNodeId(null)
+        setWorkflowInitialized(true)
+        setNotice({
+          tone: 'neutral',
+          message: tr(
+            '已建立空白工作流；可在画布上右键新建第一个节点。',
+            'Blank workflow created; right-click the canvas to add the first node.',
+          ),
+        })
+      }}
       onNodesChange={onNodesChange}
       onOpenNode={(node) => {
         setSelectedNodeId(node.id)
         setActiveView(NODE_VIEW[node.data.definition.type_id] ?? 'workflow')
       }}
+      onOpenProjects={() => setActiveView('projects')}
       onPublish={() => void publishWorkflow()}
-      onReset={resetWorkflow}
+      onClear={clearWorkflowCanvas}
       onRetry={() => setBootstrapKey((value) => value + 1)}
       onSave={() => void saveWorkflow()}
       onSelectNode={setSelectedNodeId}
       onValidate={() => void validateCurrentWorkflow()}
       projectReady={Boolean(currentProject)}
+      projectStoragePath={currentProjectStoragePath}
+      projectTitle={currentProject?.title ?? null}
       registry={registry}
       revisions={workflowRevisions}
       runGraphs={workflowRunGraphs}
@@ -2693,6 +2759,7 @@ function App() {
       setEdges={setEdges}
       setNodes={setNodes}
       templates={workflowTemplates}
+      workflowInitialized={workflowInitialized}
     />
   )
 
@@ -3872,7 +3939,7 @@ function App() {
   void reviewResult
 
   return (
-    <div className="app-shell">
+    <div className={`app-shell ${activeView === 'workflow' ? 'workflow-focus' : ''}`}>
       <header className="topbar">
         <div className="brand">
           <div className="brand-mark"><Atom size={24} /></div>

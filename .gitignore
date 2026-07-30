@@ -26,6 +26,7 @@ dist/
 node_modules/
 **/node_modules/
 .pnpm-store/
+.npm-playwright-cache/
 apps/web/dist/
 *.tsbuildinfo
 

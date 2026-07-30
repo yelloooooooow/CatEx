@@ -16,7 +16,7 @@ function option(name, fallback) {
   return value ? value.slice(prefix.length) : fallback
 }
 
-const apiPort = Number(option('api-port', '8000'))
+const apiPort = Number(option('api-port', '8765'))
 const webPort = Number(option('web-port', '5173'))
 const keepAliveSeconds = Number(option('keep-alive-seconds', '0'))
 const openBrowser = !process.argv.includes('--no-browser')
