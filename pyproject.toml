@@ -77,6 +77,8 @@ include = [
   "/package.json",
   "/pnpm-lock.yaml",
   "/pnpm-workspace.yaml",
+  "/scripts/local_workbench_probe.mjs",
+  "/scripts/start_catex.mjs",
   "/scripts/start_web_poc.mjs",
   "/启动 CatEx 工作台.cmd",
   "/src",

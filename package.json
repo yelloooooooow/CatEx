@@ -10,7 +10,8 @@
     "web:build": "pnpm --dir apps/web build",
     "web:test": "pnpm --dir apps/web test",
     "web:check": "pnpm --dir apps/web check",
-    "release:check": "pnpm web:check && pnpm web:test && pnpm web:build",
+    "launcher:test": "node --test scripts/local_workbench_probe.test.mjs",
+    "release:check": "pnpm launcher:test && pnpm web:check && pnpm web:test && pnpm web:build",
     "release:build": "pnpm release:check && python -m build"
   }
 }

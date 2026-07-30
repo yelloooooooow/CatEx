@@ -4,6 +4,8 @@ import { createServer } from 'node:net'
 import { dirname, join, resolve } from 'node:path'
 import { fileURLToPath } from 'node:url'
 
+import { compatibleWorkbenchIsRunning as probeCompatibleWorkbench } from './local_workbench_probe.mjs'
+
 const scriptDirectory = dirname(fileURLToPath(import.meta.url))
 const repositoryRoot = resolve(scriptDirectory, '..')
 const webRoot = join(repositoryRoot, 'apps', 'web')
@@ -41,14 +43,7 @@ function portIsAvailable() {
 }
 
 async function compatibleWorkbenchIsRunning() {
-  try {
-    const response = await fetch(`${url}/api/v1/capabilities`, {
-      signal: AbortSignal.timeout(1500),
-    })
-    return response.ok && Boolean((await response.json()).catex_version)
-  } catch {
-    return false
-  }
+  return probeCompatibleWorkbench(port)
 }
 
 function openWorkbench() {
