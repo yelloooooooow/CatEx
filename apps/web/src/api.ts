@@ -10,6 +10,15 @@ import type {
   ChgnetPreRelaxationResponse,
   CifConversionResponse,
   EnergyDerivation,
+  ExperimentalCandidateReview,
+  ExperimentalCatalogSnapshot,
+  ExperimentalEvidenceArtifact,
+  ExperimentalMaterialization,
+  ExperimentalModelingCapabilities,
+  ExperimentalModelingRun,
+  ExperimentalRunSummary,
+  ExperimentalSpec,
+  ExperimentalSpecRevision,
   HpcCancellationReceipt,
   HpcObservation,
   HpcProfile,
@@ -159,6 +168,156 @@ export const api = {
       body: form,
     })
   },
+  experimentalModelingCapabilities: () =>
+    requestJson<ExperimentalModelingCapabilities>(
+      '/api/v1/experimental-modeling/capabilities',
+    ),
+  experimentalEvidence: async (projectId: string) => {
+    const payload = await requestJson<{ evidence: ExperimentalEvidenceArtifact[] }>(
+      `/api/v1/projects/${projectId}/experimental-modeling/evidence`,
+    )
+    return payload.evidence
+  },
+  addExperimentalEvidence: (projectId: string, file: File) => {
+    const form = new FormData()
+    form.append('file', file)
+    return requestJson<ExperimentalEvidenceArtifact>(
+      `/api/v1/projects/${projectId}/experimental-modeling/evidence`,
+      { method: 'POST', body: form },
+    )
+  },
+  experimentalSpec: async (projectId: string) => {
+    const payload = await requestJson<{ revision: ExperimentalSpecRevision | null }>(
+      `/api/v1/projects/${projectId}/experimental-modeling/spec`,
+    )
+    return payload.revision
+  },
+  saveExperimentalSpec: (projectId: string, payload: ExperimentalSpec) =>
+    requestJson<ExperimentalSpecRevision>(
+      `/api/v1/projects/${projectId}/experimental-modeling/spec`,
+      {
+        method: 'PUT',
+        headers: { 'content-type': 'application/json' },
+        body: JSON.stringify(payload),
+      },
+    ),
+  experimentalCatalogs: async (projectId: string) => {
+    const payload = await requestJson<{ catalogs: ExperimentalCatalogSnapshot[] }>(
+      `/api/v1/projects/${projectId}/experimental-modeling/catalogs`,
+    )
+    return payload.catalogs
+  },
+  fetchOptimadeCatalog: (
+    projectId: string,
+    payload: {
+      base_url: string
+      provider_id: string
+      required_elements: string[]
+      maximum_results: number
+      maximum_pages: number
+      license?: string
+      citation?: string
+    },
+  ) =>
+    requestJson<ExperimentalCatalogSnapshot>(
+      `/api/v1/projects/${projectId}/experimental-modeling/providers/optimade/search`,
+      {
+        method: 'POST',
+        headers: { 'content-type': 'application/json' },
+        body: JSON.stringify(payload),
+      },
+    ),
+  fetchMaterialsProjectCatalog: (
+    projectId: string,
+    payload: { required_elements: string[]; maximum_results: number },
+  ) =>
+    requestJson<ExperimentalCatalogSnapshot>(
+      `/api/v1/projects/${projectId}/experimental-modeling/providers/materials-project/search`,
+      {
+        method: 'POST',
+        headers: { 'content-type': 'application/json' },
+        body: JSON.stringify(payload),
+      },
+    ),
+  experimentalRuns: async (projectId: string) => {
+    const payload = await requestJson<{ runs: ExperimentalRunSummary[] }>(
+      `/api/v1/projects/${projectId}/experimental-modeling/runs`,
+    )
+    return payload.runs
+  },
+  createExperimentalRun: (
+    projectId: string,
+    payload: {
+      planner_kind: 'rule' | 'gpt'
+      catalog_ids: string[]
+      maximum_representatives: number
+      xrd_settings: {
+        wavelength: string
+        shift_values_degrees: number[]
+        fwhm_values_degrees: number[]
+        baseline_window_points: number
+        peak_relative_threshold: number
+        peak_tolerance_degrees: number
+        single_phase_pool: number
+        maximum_phases: number
+        complexity_penalty: number
+        minimum_supported_score: number
+        ambiguity_margin: number
+      }
+    },
+  ) =>
+    requestJson<ExperimentalModelingRun>(
+      `/api/v1/projects/${projectId}/experimental-modeling/runs`,
+      {
+        method: 'POST',
+        headers: { 'content-type': 'application/json' },
+        body: JSON.stringify(payload),
+      },
+    ),
+  experimentalRun: (projectId: string, runId: string) =>
+    requestJson<ExperimentalModelingRun>(
+      `/api/v1/projects/${projectId}/experimental-modeling/runs/${runId}`,
+    ),
+  experimentalReviews: async (projectId: string, runId: string) => {
+    const payload = await requestJson<{ reviews: ExperimentalCandidateReview[] }>(
+      `/api/v1/projects/${projectId}/experimental-modeling/runs/${runId}/reviews`,
+    )
+    return payload.reviews
+  },
+  reviewExperimentalCandidates: (
+    projectId: string,
+    runId: string,
+    payload: {
+      approved_candidate_ids: string[]
+      reviewer: string
+      note: string
+    },
+  ) =>
+    requestJson<ExperimentalCandidateReview>(
+      `/api/v1/projects/${projectId}/experimental-modeling/runs/${runId}/reviews`,
+      {
+        method: 'POST',
+        headers: { 'content-type': 'application/json' },
+        body: JSON.stringify(payload),
+      },
+    ),
+  materializeExperimentalCandidates: (
+    projectId: string,
+    runId: string,
+    payload: {
+      candidate_ids: string[]
+      confirm_report_sha256: string
+      approved_write: true
+    },
+  ) =>
+    requestJson<ExperimentalMaterialization>(
+      `/api/v1/projects/${projectId}/experimental-modeling/runs/${runId}/materializations`,
+      {
+        method: 'POST',
+        headers: { 'content-type': 'application/json' },
+        body: JSON.stringify(payload),
+      },
+    ),
   runChgnetPreRelaxation: (
     projectId: string,
     artifactId: string,

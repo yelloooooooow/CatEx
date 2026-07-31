@@ -1,0 +1,505 @@
+"""End-to-end experiment-informed candidate inference and controlled materialization."""
+
+from __future__ import annotations
+
+import json
+from dataclasses import dataclass
+from pathlib import Path
+from typing import Any
+
+from pymatgen.core import Structure
+
+from catex.experimental.models import (
+    CandidateAssessment,
+    ClaimLevel,
+    EvidenceKind,
+    ExperimentSpec,
+    InferenceStatus,
+    ModelKind,
+    StructuralHypothesis,
+    content_digest,
+)
+from catex.experimental.planning import CandidatePlan, CandidatePlanner
+from catex.experimental.providers import ProviderRegistry
+from catex.experimental.recipes import CandidateExecution, execute_candidate_recipe
+from catex.experimental.spec import ExperimentInput
+from catex.experimental.xrd import (
+    PhaseSearchReport,
+    XRDSearchSettings,
+    parse_xrd_path,
+    search_xrd_phases,
+)
+from catex.hashing import artifact_record, structure_hash
+from catex.models import ArtifactRecord, Diagnostic, Severity
+
+
+@dataclass(frozen=True, slots=True)
+class ExperimentalModelingReport:
+    """Serializable scientific result; runtime structures remain out of the record."""
+
+    experiment: ExperimentSpec
+    status: InferenceStatus
+    claim_ceiling: ClaimLevel
+    phase_search: PhaseSearchReport | None
+    candidate_plan: CandidatePlan
+    candidate_assessments: tuple[CandidateAssessment, ...]
+    representative_candidate_ids: tuple[str, ...]
+    unresolved_hypothesis_ids: tuple[str, ...]
+    ambiguity_reasons: tuple[str, ...]
+    recommended_next_experiments: tuple[str, ...]
+    diagnostics: tuple[Diagnostic, ...]
+    external_api_called: bool
+    writes_performed: bool = False
+    schema_version: str = "catex.experimental-modeling-report.v1"
+
+    @property
+    def has_errors(self) -> bool:
+        return any(item.severity is Severity.ERROR for item in self.diagnostics)
+
+    @property
+    def identity_sha256(self) -> str:
+        return content_digest(self.to_dict(include_identity=False))
+
+    def to_dict(self, *, include_identity: bool = True) -> dict[str, Any]:
+        result = {
+            "schema_version": self.schema_version,
+            "status": self.status.value,
+            "claim_ceiling": self.claim_ceiling.value,
+            "claim_interpretation": (
+                "The report ranks representative hypotheses; it does not reconstruct "
+                "a unique real atomic structure."
+            ),
+            "experiment": self.experiment.to_dict(),
+            "phase_search": self.phase_search.to_dict() if self.phase_search else None,
+            "candidate_plan": self.candidate_plan.to_dict(),
+            "candidate_assessments": [item.to_dict() for item in self.candidate_assessments],
+            "representative_candidate_ids": list(self.representative_candidate_ids),
+            "unresolved_hypothesis_ids": list(self.unresolved_hypothesis_ids),
+            "ambiguity_reasons": list(self.ambiguity_reasons),
+            "recommended_next_experiments": list(self.recommended_next_experiments),
+            "threshold_interpretation": (
+                "Configured scores are provisional ranking gates, not universal "
+                "experiment-versus-calculation error tolerances."
+            ),
+            "external_api_called": self.external_api_called,
+            "writes_performed": self.writes_performed,
+            "diagnostics": [item.to_dict() for item in self.diagnostics],
+        }
+        if include_identity:
+            result["identity_sha256"] = self.identity_sha256
+        return result
+
+
+@dataclass(frozen=True, slots=True)
+class ExperimentalModelingRun:
+    """Serializable report paired with in-memory candidate structures."""
+
+    report: ExperimentalModelingReport
+    candidates: tuple[CandidateExecution, ...]
+
+    def representative_structures(self) -> tuple[tuple[str, Structure], ...]:
+        selected = set(self.report.representative_candidate_ids)
+        return tuple(
+            (item.candidate_id, item.structure.copy())
+            for item in self.candidates
+            if item.candidate_id in selected
+        )
+
+
+@dataclass(frozen=True, slots=True)
+class MaterializedCandidate:
+    """One newly written DFT-ready structure artifact."""
+
+    candidate_id: str
+    poscar: ArtifactRecord
+    cif: ArtifactRecord
+
+    def to_dict(self) -> dict[str, Any]:
+        return {
+            "candidate_id": self.candidate_id,
+            "poscar": self.poscar.to_dict(),
+            "cif": self.cif.to_dict(),
+        }
+
+
+@dataclass(frozen=True, slots=True)
+class CandidateMaterializationReport:
+    """Manifest for an explicit new-directory write."""
+
+    inference_sha256: str
+    destination: str
+    candidates: tuple[MaterializedCandidate, ...]
+    manifest: ArtifactRecord
+    writes_performed: bool = True
+    schema_version: str = "catex.candidate-materialization.v1"
+
+    def to_dict(self) -> dict[str, Any]:
+        return {
+            "schema_version": self.schema_version,
+            "inference_sha256": self.inference_sha256,
+            "destination": self.destination,
+            "candidates": [item.to_dict() for item in self.candidates],
+            "manifest": self.manifest.to_dict(),
+            "writes_performed": self.writes_performed,
+        }
+
+
+def _select_xrd_evidence(
+    experiment: ExperimentInput,
+) -> tuple[Path | None, tuple[Diagnostic, ...]]:
+    candidates = [
+        item
+        for item in experiment.spec.evidence
+        if item.kind in {EvidenceKind.XRD, EvidenceKind.GIXRD}
+        and item.evidence_id in experiment.artifact_paths
+    ]
+    exact_state = [item for item in candidates if item.sample_state is experiment.spec.target_state]
+    usable = exact_state or candidates
+    if not usable:
+        return (
+            None,
+            (
+                Diagnostic(
+                    "EXPERIMENTAL_MODELING_NO_XRD_ARTIFACT",
+                    Severity.WARNING,
+                    "No local XRD/GIXRD artifact is available for phase-family inference.",
+                ),
+            ),
+        )
+    selected = sorted(usable, key=lambda item: item.evidence_id)[0]
+    diagnostics = []
+    if len(usable) > 1:
+        diagnostics.append(
+            Diagnostic(
+                "EXPERIMENTAL_MODELING_MULTIPLE_XRD_ARTIFACTS",
+                Severity.WARNING,
+                "Only one XRD artifact is used by the v1 vertical slice.",
+                {
+                    "selected_evidence_id": selected.evidence_id,
+                    "available_evidence_ids": sorted(item.evidence_id for item in usable),
+                },
+            )
+        )
+    if selected.sample_state is not experiment.spec.target_state:
+        diagnostics.append(
+            Diagnostic(
+                "EXPERIMENTAL_MODELING_XRD_STATE_MISMATCH",
+                Severity.WARNING,
+                "The selected diffraction pattern belongs to a different sample state.",
+                {
+                    "pattern_state": selected.sample_state.value,
+                    "target_state": experiment.spec.target_state.value,
+                },
+            )
+        )
+    return experiment.artifact_paths[selected.evidence_id], tuple(diagnostics)
+
+
+def _ranked_phase_scores(
+    phase_search: PhaseSearchReport | None,
+) -> tuple[tuple[tuple[str, ...], float], ...]:
+    if phase_search is None:
+        return ()
+    values = [
+        ((item.reference_key,), item.evidence_score) for item in phase_search.single_phase_matches
+    ]
+    values.extend(
+        (item.reference_keys, item.evidence_score) for item in phase_search.combination_matches
+    )
+    return tuple(sorted(values, key=lambda item: (-item[1], item[0])))
+
+
+def _ambiguity_reasons(
+    phase_search: PhaseSearchReport | None,
+    hypotheses: tuple[StructuralHypothesis, ...],
+) -> tuple[str, ...]:
+    reasons: list[str] = []
+    ranked = _ranked_phase_scores(phase_search)
+    if (
+        len(ranked) >= 2
+        and phase_search is not None
+        and ranked[0][1] - ranked[1][1] <= phase_search.settings.ambiguity_margin
+    ):
+        reasons.append(
+            "Multiple phase combinations lie within the configured XRD ambiguity margin."
+        )
+    if phase_search is not None and phase_search.status == "insufficient_support":
+        reasons.append(
+            "The local reference library does not explain the diffraction pattern strongly enough."
+        )
+    if any(not item.generated_atomistic_candidate for item in hypotheses):
+        reasons.append(
+            "At least one evidence-supported hypothesis lacks a defensible atomic realization."
+        )
+    return tuple(reasons)
+
+
+def _next_experiments(
+    spec: ExperimentSpec,
+    phase_search: PhaseSearchReport | None,
+    hypotheses: tuple[StructuralHypothesis, ...],
+) -> tuple[str, ...]:
+    kinds = {item.kind for item in spec.evidence}
+    recommendations: list[str] = []
+    if not ({EvidenceKind.ICP, EvidenceKind.EDS} & kinds):
+        recommendations.append(
+            "Add ICP-OES or quantified EDS with uncertainty to constrain bulk composition."
+        )
+    if not ({EvidenceKind.XRD, EvidenceKind.GIXRD} & kinds):
+        recommendations.append(
+            "Add laboratory XRD/GIXRD with wavelength, scan range, substrate, "
+            "and geometry metadata."
+        )
+    elif phase_search is not None and phase_search.status != "hypotheses_found":
+        recommendations.append(
+            "Acquire a longer-count or geometry-adjusted XRD/GIXRD scan before "
+            "adding a costly method."
+        )
+    if EvidenceKind.XPS not in kinds:
+        recommendations.append(
+            "Add state-resolved XPS to test surface oxidation/hydroxylation hypotheses."
+        )
+    if EvidenceKind.TEM not in kinds:
+        recommendations.append(
+            "Add targeted TEM/SAED lattice-spacing and crystallite-size evidence "
+            "for leading phases."
+        )
+    if any(item.hypothesis_id == "surface-oxygen-unresolved" for item in hypotheses):
+        recommendations.append(
+            "Measure XPS before and after activation, and compare with Raman if "
+            "oxide families remain ambiguous."
+        )
+    if any(item.hypothesis_id == "disordered-motif-ensemble-unresolved" for item in hypotheses):
+        recommendations.append(
+            "Treat disorder as a motif ensemble; use total scattering/PDF only if "
+            "candidate-dependent DFT conclusions remain different."
+        )
+    return tuple(dict.fromkeys(recommendations))
+
+
+def _candidate_assessment(
+    execution: CandidateExecution,
+    phase_support: dict[str, float],
+) -> CandidateAssessment:
+    inherited = phase_support.get(execution.recipe.parent_reference_key)
+    operation_penalty = 0.01 * max(0, len(execution.recipe.operations) - 1)
+    if inherited is None:
+        evidence_score = max(0.0, 0.15 - operation_penalty)
+    elif execution.model_kind is ModelKind.SURFACE:
+        evidence_score = max(0.0, inherited * 0.95 - operation_penalty)
+    else:
+        evidence_score = max(0.0, inherited - operation_penalty)
+    xrd_direct = (
+        execution.model_kind is ModelKind.BULK
+        and len(execution.recipe.operations) == 1
+        and execution.recipe.operations[0].kind.value == "identity"
+    )
+    return CandidateAssessment(
+        candidate_id=execution.candidate_id,
+        recipe_id=execution.recipe.recipe_id,
+        hypothesis_id=execution.recipe.hypothesis_id,
+        parent_reference_key=execution.recipe.parent_reference_key,
+        model_kind=execution.model_kind,
+        structure_sha256=structure_hash(execution.structure),
+        formula=execution.structure.composition.reduced_formula,
+        num_sites=len(execution.structure),
+        valid=execution.valid,
+        evidence_score=evidence_score,
+        phase_support_score=inherited,
+        xrd_directly_applicable=xrd_direct,
+        transformation_sha256s=execution.transformation_sha256s,
+        diagnostics=execution.diagnostics,
+    )
+
+
+def _representatives(
+    assessments: tuple[CandidateAssessment, ...],
+    *,
+    maximum_representatives: int,
+) -> tuple[str, ...]:
+    valid = [item for item in assessments if item.valid]
+    valid.sort(
+        key=lambda item: (
+            -item.evidence_score,
+            item.parent_reference_key,
+            item.model_kind.value,
+            item.candidate_id,
+        )
+    )
+    selected: list[CandidateAssessment] = []
+    seen_hashes: set[str] = set()
+    seen_groups: set[tuple[str, ModelKind]] = set()
+    for item in valid:
+        group = (item.parent_reference_key, item.model_kind)
+        if item.structure_sha256 in seen_hashes:
+            continue
+        if group not in seen_groups:
+            selected.append(item)
+            seen_hashes.add(item.structure_sha256)
+            seen_groups.add(group)
+        if len(selected) == maximum_representatives:
+            return tuple(candidate.candidate_id for candidate in selected)
+    for item in valid:
+        if item.structure_sha256 in seen_hashes:
+            continue
+        selected.append(item)
+        seen_hashes.add(item.structure_sha256)
+        if len(selected) == maximum_representatives:
+            break
+    return tuple(item.candidate_id for item in selected)
+
+
+def infer_experimental_models(
+    experiment: ExperimentInput,
+    registry: ProviderRegistry,
+    planner: CandidatePlanner,
+    *,
+    xrd_settings: XRDSearchSettings | None = None,
+    maximum_representatives: int = 10,
+) -> ExperimentalModelingRun:
+    """Run the local evidence-to-representative-model vertical slice."""
+
+    if not 1 <= maximum_representatives <= 50:
+        raise ValueError("maximum_representatives must be between 1 and 50")
+    diagnostics: list[Diagnostic] = []
+    xrd_path, xrd_diagnostics = _select_xrd_evidence(experiment)
+    diagnostics.extend(xrd_diagnostics)
+    phase_search = None
+    if xrd_path is not None:
+        pattern = parse_xrd_path(xrd_path)
+        phase_search = search_xrd_phases(
+            pattern,
+            registry,
+            allowed_elements=experiment.spec.allowed_elements,
+            excluded_elements=experiment.spec.excluded_elements,
+            required_elements=experiment.spec.required_bulk_elements,
+            settings=xrd_settings,
+        )
+        diagnostics.extend(phase_search.diagnostics)
+
+    plan = planner.plan(experiment.spec, registry, phase_search)
+    diagnostics.extend(plan.diagnostics)
+    executions: list[CandidateExecution] = []
+    for recipe in plan.recipes:
+        try:
+            executions.extend(execute_candidate_recipe(recipe, registry, experiment.spec))
+        except ValueError as exc:
+            diagnostics.append(
+                Diagnostic(
+                    "CANDIDATE_RECIPE_EXECUTION_FAILED",
+                    Severity.ERROR,
+                    "A candidate recipe failed local deterministic validation.",
+                    {
+                        "recipe_id": recipe.recipe_id,
+                        "exception_type": type(exc).__name__,
+                        "reason": str(exc),
+                    },
+                )
+            )
+
+    phase_support = phase_search.ranked_reference_support() if phase_search is not None else {}
+    assessments = tuple(_candidate_assessment(item, phase_support) for item in executions)
+    representative_ids = _representatives(
+        assessments,
+        maximum_representatives=maximum_representatives,
+    )
+    unresolved = tuple(
+        item.hypothesis_id for item in plan.hypotheses if not item.generated_atomistic_candidate
+    )
+    ambiguity = _ambiguity_reasons(phase_search, plan.hypotheses)
+    if not representative_ids:
+        status = InferenceStatus.NO_VALID_CANDIDATES
+        claim = ClaimLevel.NO_ATOMIC_CLAIM
+    elif phase_search is None or phase_search.status != "hypotheses_found":
+        status = InferenceStatus.INSUFFICIENT_EVIDENCE
+        claim = ClaimLevel.CANDIDATE_ONLY
+    else:
+        status = InferenceStatus.READY_FOR_REVIEW
+        claim = ClaimLevel.PHASE_FAMILY_SUPPORTED
+    report = ExperimentalModelingReport(
+        experiment=experiment.spec,
+        status=status,
+        claim_ceiling=claim,
+        phase_search=phase_search,
+        candidate_plan=plan,
+        candidate_assessments=assessments,
+        representative_candidate_ids=representative_ids,
+        unresolved_hypothesis_ids=unresolved,
+        ambiguity_reasons=ambiguity,
+        recommended_next_experiments=_next_experiments(
+            experiment.spec,
+            phase_search,
+            plan.hypotheses,
+        ),
+        diagnostics=tuple(diagnostics),
+        external_api_called=plan.external_api_called,
+    )
+    return ExperimentalModelingRun(report=report, candidates=tuple(executions))
+
+
+def materialize_representative_models(
+    run: ExperimentalModelingRun,
+    destination: str | Path,
+) -> CandidateMaterializationReport:
+    """Write only selected candidates into one entirely new directory."""
+
+    target = Path(destination).resolve()
+    if target.exists():
+        raise ValueError("candidate destination must not already exist")
+    if not target.parent.is_dir():
+        raise ValueError("candidate destination parent must exist")
+    representatives = run.representative_structures()
+    if not representatives:
+        raise ValueError("inference run has no representative structures to materialize")
+    target.mkdir()
+    records: list[MaterializedCandidate] = []
+    manifest_candidates: list[dict[str, Any]] = []
+    for index, (candidate_id, structure) in enumerate(representatives, start=1):
+        candidate_directory = target / f"{index:02d}-{candidate_id}"
+        candidate_directory.mkdir()
+        poscar = candidate_directory / "POSCAR"
+        cif = candidate_directory / "structure.cif"
+        structure.to(filename=poscar, fmt="poscar")
+        structure.to(filename=cif, fmt="cif")
+        poscar_record = artifact_record(poscar)
+        cif_record = artifact_record(cif)
+        records.append(
+            MaterializedCandidate(
+                candidate_id=candidate_id,
+                poscar=poscar_record,
+                cif=cif_record,
+            )
+        )
+        manifest_candidates.append(
+            {
+                "candidate_id": candidate_id,
+                "structure_sha256": structure_hash(structure),
+                "poscar_sha256": poscar_record.sha256,
+                "cif_sha256": cif_record.sha256,
+            }
+        )
+    manifest_path = target / "manifest.json"
+    manifest_payload = {
+        "schema_version": "catex.candidate-materialization-manifest.v1",
+        "inference_sha256": run.report.identity_sha256,
+        "claim_ceiling": run.report.claim_ceiling.value,
+        "scientific_review_required": True,
+        "candidates": manifest_candidates,
+    }
+    manifest_path.write_text(
+        json.dumps(
+            manifest_payload,
+            allow_nan=False,
+            ensure_ascii=False,
+            indent=2,
+            sort_keys=True,
+        )
+        + "\n",
+        encoding="utf-8",
+    )
+    return CandidateMaterializationReport(
+        inference_sha256=run.report.identity_sha256,
+        destination=str(target),
+        candidates=tuple(records),
+        manifest=artifact_record(manifest_path),
+    )

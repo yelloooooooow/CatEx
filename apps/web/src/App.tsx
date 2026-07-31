@@ -29,6 +29,7 @@ import {
   LockKeyhole,
   Languages,
   MousePointer2,
+  Microscope,
   Download,
   Settings2,
   Server,
@@ -44,6 +45,7 @@ import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 
 import { api } from './api'
 import { CampaignWorkbench } from './components/CampaignWorkbench'
+import { ExperimentalModelingWorkbench } from './components/ExperimentalModelingWorkbench'
 import { FreeEnergyDiagram } from './components/FreeEnergyDiagram'
 import { StructureViewer } from './components/StructureViewer'
 import {
@@ -143,6 +145,7 @@ Direct
 
 type WorkspaceView =
   | 'projects'
+  | 'experimental'
   | 'workflow'
   | 'structure'
   | 'protocol'
@@ -188,6 +191,10 @@ interface WorkspaceDirectoryHandle {
 }
 
 const NODE_VIEW: Record<string, WorkspaceView> = {
+  'experiment.evidence.prepare': 'experimental',
+  'structure.catalog.prepare': 'experimental',
+  'experiment.model.infer': 'experimental',
+  'review.candidate_models': 'experimental',
   'structure.upload': 'structure',
   'structure.inspect': 'structure',
   'hpc.connect': 'runs',
@@ -304,6 +311,7 @@ const navItems: Array<{
   icon: typeof GitBranch
 }> = [
   { id: 'projects', labelZh: '项目', labelEn: 'Projects', shortLabelZh: '项', shortLabelEn: 'P', icon: FolderOpen },
+  { id: 'experimental', labelZh: '实验建模', labelEn: 'Experimental Models', shortLabelZh: '实', shortLabelEn: 'X', icon: Microscope },
   { id: 'workflow', labelZh: '工作流', labelEn: 'Workflow', shortLabelZh: '流', shortLabelEn: 'W', icon: GitBranch },
   { id: 'structure', labelZh: '结构工作台', labelEn: 'Structures', shortLabelZh: '构', shortLabelEn: 'S', icon: Atom },
   { id: 'protocol', labelZh: '协议与输入', labelEn: 'VASP Inputs', shortLabelZh: '议', shortLabelEn: 'V', icon: Settings2 },
@@ -476,6 +484,18 @@ function App() {
   const reactionUploadTargetRef = useRef<string | null>(null)
   const languageMenuRef = useRef<HTMLDivElement>(null)
   const currentProjectId = currentProject?.project_id ?? null
+  const refreshActiveProjectArtifacts = useCallback(async () => {
+    if (!currentProjectId) return
+    const [projectArtifacts, projectRecords] = await Promise.all([
+      api.projectArtifacts(currentProjectId),
+      api.projects(),
+    ])
+    setArtifacts(projectArtifacts)
+    setProjects(projectRecords)
+    setCurrentProject((current) =>
+      projectRecords.find((project) => project.project_id === currentProjectId) ?? current,
+    )
+  }, [currentProjectId])
   const currentProjectStoragePath = localProjectDirectory(
     capabilities?.persistent_storage_root,
     currentProjectId,
@@ -4028,12 +4048,12 @@ function App() {
           <LayoutDashboard size={19} />
         </button>
         <button
-          className="rail-button"
-          onClick={() => setActiveView('projects')}
-          title="Artifact"
+          className={`rail-button ${activeView === 'experimental' ? 'active' : ''}`}
+          onClick={() => setActiveView('experimental')}
+          title={tr('实验约束建模', 'Experiment-informed modeling')}
           type="button"
         >
-          <Database size={19} />
+          <Microscope size={19} />
         </button>
         <button
           className={`rail-button ${activeView === 'runs' ? 'active' : ''}`}
@@ -4161,6 +4181,15 @@ function App() {
 
         <div className="workspace-content">
           {activeView === 'projects' && renderProjects()}
+          {activeView === 'experimental' && (
+            <ExperimentalModelingWorkbench
+              artifacts={artifacts}
+              onArtifactsChanged={refreshActiveProjectArtifacts}
+              onMessage={(tone, message) => setNotice({ tone, message })}
+              onOpenStructures={() => setActiveView('structure')}
+              projectId={currentProjectId}
+            />
+          )}
           {activeView === 'workflow' && renderWorkflow()}
           {activeView === 'structure' && renderStructure()}
           {activeView === 'protocol' && renderProtocol()}

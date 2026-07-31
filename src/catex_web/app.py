@@ -31,6 +31,7 @@ from catex_app.analysis import EnergyAnalysisService
 from catex_app.calculations import CalculationServiceError, CalculationWorkspaceService
 from catex_app.campaigns import CampaignService
 from catex_app.chgnet import ChgnetPreRelaxationService, ChgnetRunner
+from catex_app.experimental_modeling import ExperimentalModelingService
 from catex_app.hpc import HpcWorkspaceService
 from catex_app.hpc_gateway import (
     HpcConnectionProfile,
@@ -56,6 +57,7 @@ from catex_app.workflow import (
     validate_workflow,
 )
 from catex_app.workflow_runtime import WorkflowRuntimeService
+from catex_web.routes.experimental_modeling import create_experimental_modeling_router
 from catex_web.routes.platform import create_platform_router
 
 MAX_VASP_OUTPUT_UPLOAD_BYTES = 512 * 1024 * 1024
@@ -333,6 +335,7 @@ def create_app(
     analysis = EnergyAnalysisService(store)
     workflow_runtime = WorkflowRuntimeService(store)
     campaigns = CampaignService(store)
+    experimental_modeling = ExperimentalModelingService(store)
     application = FastAPI(
         title="CatEx Workbench API",
         version=__version__,
@@ -346,6 +349,7 @@ def create_app(
         allow_headers=["content-type"],
     )
     application.include_router(create_platform_router(workflow_runtime, campaigns))
+    application.include_router(create_experimental_modeling_router(experimental_modeling))
 
     @application.get("/api/v1/capabilities")
     def capabilities() -> dict[str, object]:
@@ -367,6 +371,8 @@ def create_app(
             "result_first_enabled": True,
             "reaction_analysis_enabled": True,
             "mlip_pre_relaxation_enabled": bool(chgnet_status["available"]),
+            "experimental_modeling_enabled": True,
+            "experimental_modeling": experimental_modeling.capabilities(),
             "chgnet": chgnet_status,
             "max_structure_upload_bytes": MAX_STRUCTURE_UPLOAD_BYTES,
         }

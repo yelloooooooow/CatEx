@@ -415,6 +415,7 @@ class ProjectStore:
                 "pre-relaxations",
                 "workflows",
                 "campaigns",
+                "experimental-modeling",
             ):
                 root = directory / folder
                 if not root.is_dir():

@@ -47,6 +47,22 @@ export function useI18n(): I18nContextValue {
 }
 
 const nodeTranslations: Record<string, { title: string; description: string }> = {
+  'experiment.evidence.prepare': {
+    title: 'Prepare experimental constraints',
+    description: 'Register sample lifecycle, characterization evidence, and composition intervals in the Experimental Models workspace.',
+  },
+  'structure.catalog.prepare': {
+    title: 'Prepare parent-structure catalog',
+    description: 'Combine project structures, literature structures, and explicit database snapshots.',
+  },
+  'experiment.model.infer': {
+    title: 'Infer candidate models',
+    description: 'Generate a bounded hypothesis set from evidence and traceable parent structures.',
+  },
+  'review.candidate_models': {
+    title: 'Review candidate models',
+    description: 'Explicitly approve representative models without claiming a unique real structure.',
+  },
   'structure.upload': {
     title: 'Upload structure',
     description: 'Import a POSCAR or CIF while preserving the source artifact.',
@@ -130,6 +146,10 @@ const nodeTranslations: Record<string, { title: string; description: string }> =
 }
 
 const portTranslations: Record<string, string> = {
+  experiment_evidence_set: 'Experimental evidence set',
+  structure_catalog: 'Structure catalog',
+  candidate_model_set: 'Candidate model set',
+  reviewed_model_set: 'Reviewed model set',
   structure_artifact: 'Structure artifact',
   structure_record: 'Structure record',
   reviewed_structure: 'Reviewed structure',
@@ -144,6 +164,8 @@ const portTranslations: Record<string, string> = {
 }
 
 const parameterTranslations: Record<string, string> = {
+  planner: 'Planner',
+  maximum_representatives: 'Representative limit',
   input_mode: 'Input mode',
   potcar_family: 'POTCAR family',
   enabled: 'Enabled',
@@ -190,6 +212,7 @@ export function localizeNodeDefinition(
 
 export const statusLabels: Record<Language, Record<string, string>> = {
   'zh-CN': {
+    experiment: '实验建模',
     idle: '待处理',
     running: '处理中',
     success: '已完成',
@@ -198,6 +221,7 @@ export const statusLabels: Record<Language, Record<string, string>> = {
     blocked: '已阻断',
   },
   en: {
+    experiment: 'experiment',
     idle: 'Pending',
     running: 'Running',
     success: 'Complete',

@@ -34,6 +34,7 @@ export interface NodeDefinition {
   category:
     | 'source'
     | 'structure'
+    | 'experiment'
     | 'review'
     | 'protocol'
     | 'execution'
@@ -100,6 +101,8 @@ export interface Capabilities {
   reaction_analysis_enabled?: boolean
   mlip_pre_relaxation_enabled?: boolean
   chgnet?: ChgnetCapabilities
+  experimental_modeling_enabled?: boolean
+  experimental_modeling?: ExperimentalModelingCapabilities
 }
 
 export interface ChgnetCapabilities {
@@ -794,3 +797,271 @@ export interface ReactionAnalysis {
 }
 
 export type RuntimeStatus = 'idle' | 'running' | 'success' | 'warning' | 'review' | 'blocked'
+
+export type ExperimentalSampleState =
+  | 'as_prepared'
+  | 'activated'
+  | 'operando_approximation'
+  | 'post_mortem'
+  | 'unspecified'
+
+export type ExperimentalEvidenceKind =
+  | 'xrd'
+  | 'gixrd'
+  | 'icp'
+  | 'eds'
+  | 'xps'
+  | 'raman'
+  | 'sem'
+  | 'tem'
+  | 'synthesis'
+  | 'electrochemistry'
+  | 'literature'
+  | 'other'
+
+export interface ExperimentalModelingCapabilities {
+  schema_version: 'catex.experimental-modeling-capabilities.v1'
+  enabled: boolean
+  max_evidence_upload_bytes: number
+  rule_planner: { available: boolean; external_api: false }
+  providers: {
+    project: { available: boolean; requires_key: false }
+    optimade: { available: boolean; requires_key: false }
+    materials_project: {
+      available: boolean
+      client_installed: boolean
+      key_configured: boolean
+      requires_key: true
+      api_key_environment_variable: 'MP_API_KEY'
+    }
+  }
+  gpt_planner: {
+    available: boolean
+    key_configured: boolean
+    api_key_environment_variable: 'OPENAI_API_KEY'
+    model: string
+    responses_api: true
+    stores_responses: false
+  }
+  credentials_persisted: false
+}
+
+export interface ExperimentalEvidenceArtifact {
+  schema_version: 'catex.web-experimental-evidence-artifact.v1'
+  evidence_artifact_id: string
+  project_id: string
+  original_filename: string
+  stored_filename: string
+  sha256: string
+  size_bytes: number
+  created_at_utc: string
+  retained: true
+}
+
+export interface ExperimentalEvidenceInput {
+  evidence_id: string
+  kind: ExperimentalEvidenceKind
+  sample_state: ExperimentalSampleState
+  role: 'hard' | 'soft' | 'context'
+  metadata: Record<string, unknown>
+  evidence_artifact_id?: string
+  note: string
+}
+
+export interface ExperimentalCompositionConstraint {
+  element: string
+  minimum_atomic_fraction: number
+  maximum_atomic_fraction: number
+  scope: 'bulk' | 'surface' | 'local' | 'unspecified'
+  evidence_ids: string[]
+}
+
+export interface ExperimentalSpec {
+  schema_version: 'catex.experiment-spec.v1'
+  sample_id: string
+  target_state: ExperimentalSampleState
+  material_pack: string
+  allowed_elements: string[]
+  excluded_elements: string[]
+  composition_constraints: ExperimentalCompositionConstraint[]
+  evidence: ExperimentalEvidenceInput[]
+}
+
+export interface ExperimentalSpecRevision {
+  schema_version: 'catex.web-experimental-spec-revision.v1'
+  spec_revision_id: string
+  project_id: string
+  created_at_utc: string
+  identity_sha256: string
+  spec: ExperimentalSpec
+  normalized_spec: ExperimentalSpec
+}
+
+export interface ExperimentalStructureReference {
+  provider: string
+  record_id: string
+  key: string
+  formula: string
+  elements: string[]
+  source_kind: string
+  source_locator: string
+  structure_sha256: string
+  artifact_sha256: string | null
+  license: string
+  citation: string
+}
+
+export interface ExperimentalCatalogSnapshot {
+  schema_version: 'catex.web-structure-catalog-snapshot.v1'
+  catalog_id: string
+  project_id: string
+  provider_kind: 'optimade' | 'materials_project'
+  provider_id: string
+  display_provider_id: string
+  created_at_utc: string
+  query: Record<string, unknown>
+  reference_count: number
+  references: ExperimentalStructureReference[]
+  fetch_report: Record<string, unknown>
+}
+
+export interface ExperimentalCandidateAssessment {
+  candidate_id: string
+  recipe_id: string
+  hypothesis_id: string
+  parent_reference_key: string
+  model_kind: 'bulk' | 'surface'
+  structure_sha256: string
+  formula: string
+  num_sites: number
+  valid: boolean
+  evidence_score: number
+  phase_support_score: number | null
+  xrd_directly_applicable: boolean
+  transformation_sha256s: string[]
+  diagnostics: Diagnostic[]
+}
+
+export interface ExperimentalCandidate {
+  candidate_id: string
+  relative_path: string
+  assessment: ExperimentalCandidateAssessment
+  viewer: ViewerPayload
+}
+
+export interface ExperimentalPhaseSearch {
+  status: string
+  best_score: number | null
+  score_interpretation: string
+  considered_reference_keys: string[]
+  settings: Record<string, unknown>
+  single_phase_matches: Array<{
+    reference_key: string
+    formula: string
+    evidence_score: number
+    cosine_similarity: number
+    explained_intensity_fraction: number
+    normalized_absolute_residual: number
+    shift_degrees: number
+    fwhm_degrees: number
+    peak_evidence: {
+      matched_pairs_degrees: number[][]
+      unexplained_observed_degrees: number[]
+      missing_predicted_degrees: number[]
+    }
+  }>
+  combination_matches: Array<{
+    reference_keys: string[]
+    formulas: string[]
+    diffraction_contributions: number[]
+    evidence_score: number
+    explained_intensity_fraction: number
+    normalized_absolute_residual: number
+  }>
+  diagnostics: Diagnostic[]
+}
+
+export interface ExperimentalModelingRun {
+  schema_version: 'catex.web-experimental-modeling-run.v1'
+  run_id: string
+  project_id: string
+  created_at_utc: string
+  spec_revision_id: string
+  planner_kind: 'rule' | 'gpt'
+  catalog_ids: string[]
+  report: {
+    status: string
+    claim_ceiling: string
+    claim_interpretation: string
+    identity_sha256: string
+    phase_search: ExperimentalPhaseSearch | null
+    candidate_plan: {
+      hypotheses: Array<{
+        hypothesis_id: string
+        summary: string
+        assumptions: string[]
+        generated_atomistic_candidate: boolean
+      }>
+      recipes: Array<Record<string, unknown>>
+      diagnostics: Diagnostic[]
+    }
+    candidate_assessments: ExperimentalCandidateAssessment[]
+    representative_candidate_ids: string[]
+    unresolved_hypothesis_ids: string[]
+    ambiguity_reasons: string[]
+    recommended_next_experiments: string[]
+    diagnostics: Diagnostic[]
+    external_api_called: boolean
+    writes_performed: false
+  }
+  xrd_plot: {
+    schema_version: 'catex.web-xrd-plot.v1'
+    label: string
+    two_theta_degrees: number[]
+    observed_normalized: number[]
+    fitted_normalized: number[]
+    residual: number[]
+  } | null
+  candidates: ExperimentalCandidate[]
+  review_required: true
+  materialized: boolean
+  materialization_id?: string
+}
+
+export interface ExperimentalRunSummary {
+  run_id: string
+  created_at_utc: string
+  spec_revision_id: string
+  planner_kind: 'rule' | 'gpt'
+  status: string
+  claim_ceiling: string
+  report_sha256: string
+  candidate_count: number
+  representative_count: number
+  materialized: boolean
+}
+
+export interface ExperimentalCandidateReview {
+  schema_version: 'catex.web-experimental-model-review.v1'
+  review_id: string
+  project_id: string
+  run_id: string
+  report_sha256: string
+  approved_candidate_ids: string[]
+  reviewer: string
+  note: string
+  reviewed_at_utc: string
+  unique_structure_claimed: false
+}
+
+export interface ExperimentalMaterialization {
+  schema_version: 'catex.web-experimental-materialization.v1'
+  materialization_id: string
+  project_id: string
+  run_id: string
+  report_sha256: string
+  candidate_ids: string[]
+  artifacts: Array<{ candidate_id: string; artifact: ProjectArtifact }>
+  materialized_at_utc: string
+  approved_write: true
+}

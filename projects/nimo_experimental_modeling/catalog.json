@@ -1,0 +1,30 @@
+{
+  "schema_version": "catex.structure-catalog.v1",
+  "provider": "synthetic-nimo",
+  "entries": [
+    {
+      "record_id": "fcc-ni",
+      "path": "structures/fcc_ni.cif",
+      "source_kind": "hypothetical",
+      "source_locator": "synthetic-software-fixture:fcc-ni",
+      "license": "CC0",
+      "citation": "Synthetic software fixture; replace before scientific use."
+    },
+    {
+      "record_id": "bcc-mo",
+      "path": "structures/bcc_mo.cif",
+      "source_kind": "hypothetical",
+      "source_locator": "synthetic-software-fixture:bcc-mo",
+      "license": "CC0",
+      "citation": "Synthetic software fixture; replace before scientific use."
+    },
+    {
+      "record_id": "b2-nimo",
+      "path": "structures/b2_nimo_hypothetical.cif",
+      "source_kind": "hypothetical",
+      "source_locator": "synthetic-software-fixture:b2-nimo",
+      "license": "CC0",
+      "citation": "Hypothetical B2 software fixture; not an experimental assignment."
+    }
+  ]
+}

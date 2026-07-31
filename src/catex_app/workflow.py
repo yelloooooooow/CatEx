@@ -25,9 +25,14 @@ class PortKind(StrEnum):
     REVIEWED_RESULT = "reviewed_result"
     RESULT_SUMMARY = "result_summary"
     CALCULATION_STATE = "calculation_state"
+    EXPERIMENT_EVIDENCE_SET = "experiment_evidence_set"
+    STRUCTURE_CATALOG = "structure_catalog"
+    CANDIDATE_MODEL_SET = "candidate_model_set"
+    REVIEWED_MODEL_SET = "reviewed_model_set"
 
 
 class NodeCategory(StrEnum):
+    EXPERIMENT = "experiment"
     SOURCE = "source"
     STRUCTURE = "structure"
     REVIEW = "review"
@@ -230,6 +235,57 @@ def _parameter(
 
 _NODE_DEFINITIONS = (
     NodeDefinition(
+        "experiment.evidence.prepare",
+        "准备实验约束",
+        "在项目实验建模工作区整理样品状态、表征证据和成分区间。",
+        NodeCategory.EXPERIMENT,
+        outputs=(_port("evidence", "实验约束集", PortKind.EXPERIMENT_EVIDENCE_SET),),
+    ),
+    NodeDefinition(
+        "structure.catalog.prepare",
+        "准备母体结构库",
+        "组合项目结构、论文结构和显式获取的数据库快照。",
+        NodeCategory.EXPERIMENT,
+        outputs=(_port("catalog", "结构目录", PortKind.STRUCTURE_CATALOG),),
+    ),
+    NodeDefinition(
+        "experiment.model.infer",
+        "推断候选模型",
+        "以规则规划器为默认, 将实验约束和母体结构转成有限候选集合。",
+        NodeCategory.EXPERIMENT,
+        inputs=(
+            _port("evidence", "实验约束集", PortKind.EXPERIMENT_EVIDENCE_SET),
+            _port("catalog", "结构目录", PortKind.STRUCTURE_CATALOG),
+        ),
+        outputs=(_port("candidates", "候选模型集", PortKind.CANDIDATE_MODEL_SET),),
+        parameters=(
+            _parameter(
+                "planner",
+                "规划器",
+                ParameterKind.CHOICE,
+                "rule",
+                choices=("rule", "gpt"),
+            ),
+            _parameter(
+                "maximum_representatives",
+                "代表性模型上限",
+                ParameterKind.INTEGER,
+                10,
+                minimum=1,
+                maximum=50,
+            ),
+        ),
+    ),
+    NodeDefinition(
+        "review.candidate_models",
+        "审核候选模型",
+        "显式选择可进入项目结构库的代表性模型, 不声明唯一真实结构。",
+        NodeCategory.REVIEW,
+        inputs=(_port("candidates", "候选模型集", PortKind.CANDIDATE_MODEL_SET),),
+        outputs=(_port("approved", "已审核模型集", PortKind.REVIEWED_MODEL_SET),),
+        review_gate=True,
+    ),
+    NodeDefinition(
         "structure.upload",
         "上传结构",
         "导入 POSCAR 或 CIF; 源文件保持不可变。",
@@ -331,6 +387,14 @@ _NODE_DEFINITIONS = (
         "读取或生成 POSCAR、INCAR、KPOINTS 和 POTCAR 元数据, 并执行运行前诊断。",
         NodeCategory.PROTOCOL,
         outputs=(_port("state", "计算状态", PortKind.CALCULATION_STATE),),
+        inputs=(
+            _port(
+                "models",
+                "已审核模型集",
+                PortKind.REVIEWED_MODEL_SET,
+                required=False,
+            ),
+        ),
         parameters=(
             _parameter(
                 "input_mode",
@@ -646,10 +710,81 @@ def _calculation_template(
     )
 
 
+def _experiment_to_dft_template() -> WorkflowTemplate:
+    """Connect experimental hypotheses to the existing reviewed DFT path."""
+
+    node_types = (
+        "experiment.evidence.prepare",
+        "structure.catalog.prepare",
+        "experiment.model.infer",
+        "review.candidate_models",
+        "vasp.input.prepare",
+        "vasp.relax",
+        "vasp.static",
+        "results.collect",
+    )
+    positions = (
+        (0.0, 0.0),
+        (0.0, 220.0),
+        (320.0, 110.0),
+        (640.0, 110.0),
+        (960.0, 110.0),
+        (1260.0, 110.0),
+        (1560.0, 110.0),
+        (1860.0, 110.0),
+    )
+    nodes = tuple(
+        WorkflowNode(
+            node_id=f"experiment-to-dft-node-{index + 1}",
+            type_id=type_id,
+            position_x=positions[index][0],
+            position_y=positions[index][1],
+            parameters={
+                parameter.key: parameter.default for parameter in NODE_REGISTRY[type_id].parameters
+            },
+        )
+        for index, type_id in enumerate(node_types)
+    )
+    connection_ports = (
+        (0, "evidence", 2, "evidence"),
+        (1, "catalog", 2, "catalog"),
+        (2, "candidates", 3, "candidates"),
+        (3, "approved", 4, "models"),
+        (4, "state", 5, "input"),
+        (5, "state", 6, "input"),
+        (6, "state", 7, "results"),
+    )
+    edges = tuple(
+        WorkflowEdge(
+            edge_id=f"experiment-to-dft-edge-{index + 1}",
+            source_node_id=nodes[source_index].node_id,
+            source_port_id=source_port,
+            target_node_id=nodes[target_index].node_id,
+            target_port_id=target_port,
+        )
+        for index, (
+            source_index,
+            source_port,
+            target_index,
+            target_port,
+        ) in enumerate(connection_ports)
+    )
+    return WorkflowTemplate(
+        template_id="experiment-to-dft",
+        title="实验约束建模到 DFT",
+        description=(
+            "整理实验约束和母体结构, 推断并审核代表性模型, 再进入现有 VASP 优化和静态计算流程。"
+        ),
+        nodes=nodes,
+        edges=edges,
+    )
+
+
 def workflow_template_catalog() -> tuple[WorkflowTemplate, ...]:
     """Return quick-build templates without coupling them to a research purpose."""
 
     return (
+        _experiment_to_dft_template(),
         _calculation_template(
             template_id="vasp-relax",
             title="结构优化",

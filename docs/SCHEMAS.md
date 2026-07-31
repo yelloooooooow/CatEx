@@ -281,3 +281,64 @@ pH correction 为零，因为 pH 已吸收到 RHE potential scale；这不表示
 `catex.scientific-case-requirement.v1` 的 satisfied 状态必须有 evidence SHA256；blocked 不会被
 默认值升级。`catex.scientific-case-readiness.v1` 只有所有 required requirement satisfied 才 ready，
 但无论 ready/blocked 都不提供 execution authorization、写文件、提交、续算或删除权限。
+
+## Experiment-informed modeling schemas
+
+| Record | Schema |
+| --- | --- |
+| evidence artifact identity | `catex.experimental-evidence.v1` |
+| experiment specification | `catex.experiment-spec.v1` |
+| local structure catalog | `catex.structure-catalog.v1` |
+| local structure reference | `catex.structure-reference.v1` |
+| OPTIMADE retrieval report | `catex.optimade-fetch.v1` |
+| cached provider catalog | `catex.provider-catalog-materialization.v1` |
+| combined OPTIMADE cache operation | `catex.optimade-catalog-fetch.v1` |
+| candidate structure recipe | `catex.candidate-recipe.v1` |
+| structural hypothesis | `catex.structural-hypothesis.v1` |
+| parsed XRD pattern | `catex.xrd-pattern.v1` |
+| phase-search report | `catex.phase-search.v1` |
+| candidate plan | `catex.candidate-plan.v1` |
+| candidate assessment | `catex.candidate-assessment.v1` |
+| modeling report | `catex.experimental-modeling-report.v1` |
+| materialization report | `catex.candidate-materialization.v1` |
+
+Evidence records identify local artifacts by basename, SHA-256, and byte size;
+runtime paths are not serialized. Evidence scores are ranking quantities, not
+calibrated posterior probabilities. Multiphase contributions are explicitly not
+mass or volume fractions. Surface candidates inherit parent-phase evidence and
+cannot raise the claim ceiling above the evidence-supported bulk phase family.
+
+Candidate recipes contain only an allowlisted operation enum and finite
+JSON-compatible parameters. The optional GPT planner must return known evidence
+IDs, known parent-reference keys, and these recipes; all operations are
+revalidated and executed locally.
+
+## Project-scoped experimental-modeling Web records
+
+The Web application wraps the scientific schemas in append-oriented project
+records. These wrappers never contain provider or model API keys.
+
+- `catex.web-experimental-evidence-artifact.v1` binds a safe original basename,
+  media-independent SHA-256, byte count, stored basename, and creation time.
+- `catex.web-experimental-spec-revision.v1` binds the exact validated
+  `catex.experiment-spec.v1` payload to evidence artifact IDs and a revision
+  SHA-256. `catex.web-experimental-spec-pointer.v1` identifies only the current
+  revision.
+- `catex.web-structure-catalog-snapshot.v1` binds provider kind, database
+  version where available, exact query, structure count, and local
+  `catex.structure-catalog.v1` artifact. Remote discovery is therefore separate
+  from inference.
+- `catex.web-experimental-modeling-run.v1` binds spec revision, selected catalog
+  revisions, planner kind, exact scientific report SHA-256, generated candidate
+  CIF hashes, bounded viewer payloads, and a downsampled XRD comparison plot.
+- `catex.web-experimental-model-review.v1` records reviewer, note, approved
+  representative candidate IDs, report SHA-256, and
+  `unique_structure_claimed=false`.
+- `catex.web-experimental-materialization.v1` binds a positive review, the
+  confirmed report SHA-256, candidate IDs, generated POSCAR hashes, and the
+  resulting project structure artifact IDs.
+
+Evidence upload is limited to 20 MiB and executable/script extensions are
+rejected. Specs contain at most 200 evidence records; catalog and inference
+requests have bounded result counts. Existing immutable records are not
+overwritten.

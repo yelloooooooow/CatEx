@@ -1,0 +1,84 @@
+{
+  "schema_version": "catex.experiment-spec.v1",
+  "sample_id": "synthetic-electrodeposited-nimo",
+  "target_state": "activated",
+  "material_pack": "alloy-electrocatalyst",
+  "allowed_elements": [
+    "Ni",
+    "Mo",
+    "O"
+  ],
+  "excluded_elements": [],
+  "composition_constraints": [
+    {
+      "element": "Ni",
+      "minimum_atomic_fraction": 0.6,
+      "maximum_atomic_fraction": 0.8,
+      "scope": "bulk",
+      "evidence_ids": [
+        "icp-as-prepared"
+      ]
+    },
+    {
+      "element": "Mo",
+      "minimum_atomic_fraction": 0.2,
+      "maximum_atomic_fraction": 0.4,
+      "scope": "bulk",
+      "evidence_ids": [
+        "icp-as-prepared"
+      ]
+    }
+  ],
+  "evidence": [
+    {
+      "evidence_id": "synthesis",
+      "kind": "synthesis",
+      "sample_state": "as_prepared",
+      "role": "context",
+      "metadata": {
+        "method": "electrodeposition",
+        "substrate": "Ni foam",
+        "example_only": true
+      },
+      "note": "Synthetic software fixture; not a laboratory record."
+    },
+    {
+      "evidence_id": "icp-as-prepared",
+      "kind": "icp",
+      "sample_state": "as_prepared",
+      "role": "hard",
+      "metadata": {
+        "basis": "atomic_fraction",
+        "example_only": true
+      }
+    },
+    {
+      "evidence_id": "xrd-as-prepared",
+      "kind": "xrd",
+      "sample_state": "as_prepared",
+      "role": "hard",
+      "artifact": "synthetic_xrd.xy",
+      "metadata": {
+        "radiation": "CuKa",
+        "geometry": "theta-2theta",
+        "substrate": "none in synthetic fixture",
+        "example_only": true
+      }
+    },
+    {
+      "evidence_id": "xps-activated",
+      "kind": "xps",
+      "sample_state": "activated",
+      "role": "soft",
+      "metadata": {
+        "elements": [
+          "Ni",
+          "Mo",
+          "O"
+        ],
+        "assignment": "possible oxide or hydroxide surface contribution",
+        "example_only": true
+      }
+    }
+  ]
+}

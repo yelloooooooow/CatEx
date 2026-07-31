@@ -1,7 +1,12 @@
 import type { Language } from './i18n'
 import type { NodeDefinition } from './types'
 
-export type WorkflowNodeGroupId = 'input' | 'preparation' | 'calculation' | 'analysis'
+export type WorkflowNodeGroupId =
+  | 'experimental'
+  | 'input'
+  | 'preparation'
+  | 'calculation'
+  | 'analysis'
 
 export interface WorkflowNodeGroup {
   id: WorkflowNodeGroupId
@@ -24,6 +29,17 @@ export interface WorkflowNodeGuidance {
 }
 
 export const WORKFLOW_NODE_GROUPS: WorkflowNodeGroup[] = [
+  {
+    id: 'experimental',
+    labelZh: '实验约束建模',
+    labelEn: 'Experimental modeling',
+    typeIds: [
+      'experiment.evidence.prepare',
+      'structure.catalog.prepare',
+      'experiment.model.infer',
+      'review.candidate_models',
+    ],
+  },
   {
     id: 'input',
     labelZh: '输入',
@@ -51,6 +67,54 @@ export const WORKFLOW_NODE_GROUPS: WorkflowNodeGroup[] = [
 ]
 
 const guidance: Record<string, WorkflowNodeGuidance> = {
+  'experiment.evidence.prepare': {
+    purposeZh: '把样品状态、XRD/GIXRD、成分区间和其他表征整理成带不确定度的证据集。',
+    purposeEn: 'Register sample state, XRD/GIXRD, composition intervals, and other characterization as an uncertainty-aware evidence set.',
+    useWhenZh: '实验制备的材料需要先转换为可计算的结构假设时使用。双击进入“实验建模”页面。',
+    useWhenEn: 'Use when an experimentally prepared material must be translated into calculable structure hypotheses. Double-click to open Experimental Models.',
+    requirementsZh: ['已打开项目', '明确目标样品状态', '至少有实验摘要；原始文件可逐步补充'],
+    requirementsEn: ['An open project', 'An explicit target sample state', 'At least an evidence summary; raw files may be added progressively'],
+    outputsZh: ['版本化实验约束集', '状态不一致与缺失信息提示'],
+    outputsEn: ['Versioned experimental constraint set', 'State-mismatch and missing-evidence warnings'],
+    cautionZh: '不要把不同生命周期状态的证据静默合并。',
+    cautionEn: 'Do not silently merge evidence from different sample lifecycle states.',
+  },
+  'structure.catalog.prepare': {
+    purposeZh: '组合项目结构、论文结构、OPTIMADE 和可选 Materials Project 快照。',
+    purposeEn: 'Combine project structures, literature structures, OPTIMADE, and optional Materials Project snapshots.',
+    useWhenZh: '需要为实验约束寻找可追溯母体结构时使用。',
+    useWhenEn: 'Use when traceable parent structures are needed for the experimental constraints.',
+    requirementsZh: ['元素范围', '至少一个项目结构或数据库快照', '来源与引用信息'],
+    requirementsEn: ['Element scope', 'At least one project structure or database snapshot', 'Source and citation metadata'],
+    outputsZh: ['不可变结构目录快照'],
+    outputsEn: ['Immutable structure catalog snapshot'],
+    cautionZh: '数据库结构只是母体假设，不等于实验样品的真实原子结构。',
+    cautionEn: 'A database structure is a parent hypothesis, not the real atomic structure of the sample.',
+  },
+  'experiment.model.infer': {
+    purposeZh: '用本地规则或可选 GPT 规划器生成有限、可复核的结构候选。',
+    purposeEn: 'Generate a bounded, reviewable candidate set with the local rule planner or optional GPT planner.',
+    useWhenZh: '实验约束版本和母体结构目录都已准备好时使用。',
+    useWhenEn: 'Use after both an evidence revision and a parent-structure catalog are ready.',
+    requirementsZh: ['实验约束集', '结构目录', '明确候选数量与 XRD nuisance 参数'],
+    requirementsEn: ['Evidence set', 'Structure catalog', 'Explicit candidate limits and XRD nuisance settings'],
+    outputsZh: ['不可变推断报告', '候选结构与未解决假设'],
+    outputsEn: ['Immutable inference report', 'Candidate structures and unresolved hypotheses'],
+    cautionZh: '分数用于排序，不是后验概率，也不是通用实验误差阈值。',
+    cautionEn: 'Scores rank evidence; they are neither posterior probabilities nor universal experimental error tolerances.',
+  },
+  'review.candidate_models': {
+    purposeZh: '人工选择可进入项目结构库的代表性候选，并追加审核依据。',
+    purposeEn: 'Select representative candidates for the project structure library and append a review rationale.',
+    useWhenZh: '检查相匹配、成分、几何诊断和假设后使用。',
+    useWhenEn: 'Use after inspecting phase support, composition, geometry diagnostics, and assumptions.',
+    requirementsZh: ['不可变推断 run', '至少一个有效代表性候选', '审核者与依据'],
+    requirementsEn: ['Immutable inference run', 'At least one valid representative', 'Reviewer and rationale'],
+    outputsZh: ['已审核模型集'],
+    outputsEn: ['Reviewed model set'],
+    cautionZh: '审核代表“足以用于当前计算问题”，不代表确认唯一真实结构。',
+    cautionEn: 'Approval means fit for the current calculation question, not confirmation of a unique real structure.',
+  },
   'vasp.input.prepare': {
     purposeZh: '把当前项目中的结构、INCAR、KPOINTS、POTCAR 元数据和提交脚本整理成可验证的 VASP 输入状态。',
     purposeEn: 'Turn the project structure, INCAR, KPOINTS, POTCAR metadata, and job script into a validated VASP input state.',
