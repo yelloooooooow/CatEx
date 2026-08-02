@@ -7,6 +7,23 @@ import { ExperimentalModelingWorkbench } from './ExperimentalModelingWorkbench'
 
 const mocks = vi.hoisted(() => ({
   saveCredential: vi.fn(),
+  experimentalRuns: vi.fn(),
+  experimentalRun: vi.fn(),
+  experimentalReviews: vi.fn(),
+}))
+
+vi.mock('./StructureViewer', () => ({
+  StructureViewer: ({
+    onAtomClick,
+    showAtomIndices,
+  }: {
+    onAtomClick?: (index: number) => void
+    showAtomIndices?: boolean
+  }) => (
+    <button data-indices={showAtomIndices ? 'on' : 'off'} onClick={() => onAtomClick?.(2)} type="button">
+      Mock structure viewer
+    </button>
+  ),
 }))
 
 const capabilities: ExperimentalModelingCapabilities = {
@@ -52,7 +69,9 @@ vi.mock('../api', () => ({
     experimentalEvidence: vi.fn(async () => []),
     experimentalSpec: vi.fn(async () => null),
     experimentalCatalogs: vi.fn(async () => []),
-    experimentalRuns: vi.fn(async () => []),
+    experimentalRuns: mocks.experimentalRuns,
+    experimentalRun: mocks.experimentalRun,
+    experimentalReviews: mocks.experimentalReviews,
     saveExperimentalCredential: mocks.saveCredential,
   },
 }))
@@ -62,6 +81,11 @@ describe('experimental credential editor', () => {
     window.localStorage.clear()
     window.localStorage.setItem('catex.language.v1', 'en')
     mocks.saveCredential.mockReset()
+    mocks.experimentalRuns.mockReset()
+    mocks.experimentalRuns.mockResolvedValue([])
+    mocks.experimentalRun.mockReset()
+    mocks.experimentalReviews.mockReset()
+    mocks.experimentalReviews.mockResolvedValue([])
     mocks.saveCredential.mockResolvedValue({
       schema_version: 'catex.credential-save.v1',
       provider: 'materials_project',
@@ -114,5 +138,120 @@ describe('experimental credential editor', () => {
     )
     expect(input).toHaveValue('')
     expect(JSON.stringify(window.localStorage)).not.toContain('browser-memory-test-key')
+  })
+
+  it('labels sample states in plain language and allows an uncertain state', async () => {
+    render(
+      <I18nProvider>
+        <ExperimentalModelingWorkbench
+          artifacts={[]}
+          onArtifactsChanged={vi.fn()}
+          onMessage={vi.fn()}
+          onOpenStructures={vi.fn()}
+          projectId="project-1"
+        />
+      </I18nProvider>,
+    )
+
+    expect((await screen.findAllByRole('option', {
+      name: 'Activated (after electrochemical activation)',
+    })).length).toBeGreaterThanOrEqual(2)
+    expect(screen.getAllByRole('option', {
+      name: 'Not specified / uncertain',
+    }).length).toBeGreaterThanOrEqual(2)
+  })
+
+  it('keeps bulk and surface composition ranges for the same element', async () => {
+    render(
+      <I18nProvider>
+        <ExperimentalModelingWorkbench
+          artifacts={[]}
+          onArtifactsChanged={vi.fn()}
+          onMessage={vi.fn()}
+          onOpenStructures={vi.fn()}
+          projectId="project-1"
+        />
+      </I18nProvider>,
+    )
+
+    await screen.findAllByLabelText('Measurement scope')
+    const scope = screen.getAllByLabelText('Measurement scope').at(-1)
+    const addRange = screen.getAllByRole('button', { name: 'Add range' }).at(-1)
+    expect(scope).toBeDefined()
+    expect(addRange).toBeDefined()
+    fireEvent.click(addRange!)
+    fireEvent.change(scope!, {
+      target: { value: 'surface' },
+    })
+    fireEvent.click(addRange!)
+
+    expect(screen.getByText(/Ni · 45\.0–75\.0 at\.% · Bulk \(ICP\)/)).toBeInTheDocument()
+    expect(screen.getByText(/Ni · 45\.0–75\.0 at\.% · Surface \(XPS\)/)).toBeInTheDocument()
+  })
+
+  it('shows read-only candidate structure and clicked atom details', async () => {
+    mocks.experimentalRuns.mockResolvedValue([{
+      run_id: 'model-run-test',
+      report_sha256: 'a'.repeat(64),
+      planner_kind: 'rule',
+      representative_count: 1,
+      candidate_count: 1,
+      status: 'supported',
+    }])
+    mocks.experimentalRun.mockResolvedValue({
+      run_id: 'model-run-test',
+      materialized: false,
+      xrd_plot: null,
+      report: {
+        representative_candidate_ids: ['candidate-1'],
+        claim_interpretation: 'Representative hypothesis, not a unique structure.',
+        claim_ceiling: 'representative_structure_family',
+        status: 'supported',
+        phase_search: null,
+        ambiguity_reasons: [],
+        recommended_next_experiments: [],
+        identity_sha256: 'a'.repeat(64),
+      },
+      candidates: [{
+        candidate_id: 'candidate-1',
+        assessment: {
+          formula: 'NiMo',
+          model_kind: 'bulk',
+          num_sites: 2,
+          evidence_score: 0.9,
+          parent_reference_key: 'project:ni-mo',
+          structure_sha256: 'b'.repeat(64),
+          valid: true,
+        },
+        viewer: {
+          schema_version: 'catex.viewer.v1',
+          lattice: [[3, 0, 0], [0, 3, 0], [0, 0, 4]],
+          species: ['Ni', 'Mo'],
+          fractional_coordinates: [[0, 0, 0], [0.5, 0.5, 0.5]],
+          cartesian_coordinates: [[0, 0, 0], [1.5, 1.5, 2]],
+          periodic: [true, true, true],
+        },
+      }],
+    })
+
+    render(
+      <I18nProvider>
+        <ExperimentalModelingWorkbench
+          artifacts={[]}
+          onArtifactsChanged={vi.fn()}
+          onMessage={vi.fn()}
+          onOpenStructures={vi.fn()}
+          projectId="project-1"
+        />
+      </I18nProvider>,
+    )
+
+    fireEvent.click(await screen.findByRole('button', { name: 'Mock structure viewer' }))
+    expect(screen.getByText('#2 · Mo')).toBeInTheDocument()
+    expect(screen.getByText('Fractional [0.5000, 0.5000, 0.5000]')).toBeInTheDocument()
+    expect(screen.getByText('a 3.000 · b 3.000 · c 4.000 Å')).toBeInTheDocument()
+
+    fireEvent.click(screen.getByRole('button', { name: 'Show indices' }))
+    expect(screen.getByRole('button', { name: 'Mock structure viewer' })).toHaveAttribute('data-indices', 'on')
   })
 })

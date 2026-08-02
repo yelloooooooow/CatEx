@@ -4,7 +4,7 @@ build-backend = "hatchling.build"
 
 [project]
 name = "catex-workbench"
-version = "0.32.1"
+version = "0.32.2"
 description = "CatEx: traceable scientific core and interactive workbench for catalysis workflows."
 readme = "README.md"
 license = "BSD-3-Clause"

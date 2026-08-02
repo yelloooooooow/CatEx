@@ -52,6 +52,16 @@ only into a destination that does not already exist.
 - Geometry and chemistry diagnostics, fail-closed recipe execution, candidate
   deduplication, representative selection, and unresolved-hypothesis retention.
 - POSCAR/CIF materialization with a content-bound manifest.
+- Read-only 3D candidate inspection with atom selection, element/index and
+  coordinate details, composition counts, cell lengths, and optional index
+  labels.
+
+Sample state is metadata about when a measurement was made, not an extra
+characterization requirement. It prevents measurements from different physical
+objects or stages from being silently combined. This matters when, for example,
+an as-prepared XRD pattern is compared with XPS measured after electrochemical
+activation. If the state is unknown, use `unspecified`; candidate generation is
+still allowed and the uncertainty remains visible in the report.
 
 ## Deliberate limitations
 
@@ -245,6 +255,9 @@ catex materialize-experimental-models experiment.json `
 
 The command refuses an existing destination. Each selected candidate receives
 `POSCAR`, `structure.cif`, and a top-level content-bound manifest.
+
+For the staged validation plan using ordinary XRD, ICP, XPS, and TEM evidence,
+see the [Ni–Mo experiment-informed modeling benchmark](NIMO_EXPERIMENTAL_MODELING_BENCHMARK.md).
 
 Optional GPT planning:
 

@@ -1,5 +1,6 @@
 :root {
-  font-family: 'Segoe UI Variable', 'Noto Sans SC', 'Microsoft YaHei UI', sans-serif;
+  font-family: Geist, 'PingFang SC', 'Microsoft YaHei', 'Noto Sans CJK SC',
+    'Source Han Sans SC', -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif;
   font-size: 16px;
   color: #dce8e3;
   background: #07110f;
@@ -568,7 +569,7 @@ button:focus-visible {
 
 .experimental-catalog-list label {
   display: grid;
-  grid-template-columns: auto minmax(0, 1fr) auto;
+  grid-template-columns: auto minmax(0, 1fr);
   align-items: center;
   gap: 9px;
   padding: 8px 10px;
@@ -870,6 +871,124 @@ button:focus-visible {
   flex: 1;
 }
 
+.experimental-field-help {
+  display: block;
+  margin: -3px 0 12px;
+  color: var(--muted);
+  line-height: 1.55;
+}
+
+.experimental-structure-inspector {
+  display: grid;
+  gap: 8px;
+  padding: 10px 0 2px;
+}
+
+.experimental-viewer-toolbar {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+  color: var(--muted);
+  font-size: 9px;
+}
+
+.experimental-viewer-toolbar button {
+  padding: 5px 8px;
+  color: var(--muted);
+  font: inherit;
+  border: 1px solid var(--line);
+  border-radius: 7px;
+  background: rgba(255, 255, 255, 0.02);
+  cursor: pointer;
+}
+
+.experimental-viewer-toolbar button.active {
+  color: var(--mint);
+  border-color: var(--mint-soft);
+  background: rgba(98, 213, 173, 0.08);
+}
+
+.experimental-element-counts {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+}
+
+.experimental-element-counts span {
+  display: inline-flex;
+  align-items: baseline;
+  gap: 5px;
+  padding: 4px 7px;
+  color: var(--muted);
+  font-size: 9px;
+  border: 1px solid var(--line);
+  border-radius: 999px;
+}
+
+.experimental-element-counts strong {
+  color: var(--text);
+  font-size: 11px;
+}
+
+.experimental-structure-summary {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 6px;
+  margin: 0;
+}
+
+.experimental-structure-summary > div {
+  min-width: 0;
+  padding: 7px;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  background: rgba(255, 255, 255, 0.015);
+}
+
+.experimental-structure-summary dt {
+  margin-bottom: 3px;
+  color: var(--muted);
+  font-size: 8px;
+}
+
+.experimental-structure-summary dd {
+  margin: 0;
+  color: var(--text);
+  font: 500 9px 'DM Mono', monospace;
+  overflow-wrap: anywhere;
+}
+
+.experimental-atom-detail {
+  display: grid;
+  grid-template-columns: auto 1fr 1fr;
+  align-items: center;
+  gap: 8px;
+  min-height: 34px;
+  padding: 7px 9px;
+  color: var(--muted);
+  font: 500 9px 'DM Mono', monospace;
+  border-left: 2px solid var(--amber);
+  background: rgba(255, 209, 102, 0.035);
+}
+
+.experimental-atom-detail strong {
+  color: var(--amber);
+}
+
+.experimental-atom-detail.muted {
+  display: flex;
+  border-left-color: var(--line);
+  background: transparent;
+}
+
+@media (max-width: 760px) {
+  .experimental-structure-summary,
+  .experimental-atom-detail {
+    grid-template-columns: 1fr;
+  }
+}
+
 .experimental-provenance {
   display: grid;
   grid-template-columns: auto minmax(0, 1fr);
@@ -877,6 +996,12 @@ button:focus-visible {
   margin-top: 8px;
   color: var(--muted);
   font-size: 9px;
+}
+
+.experimental-provenance summary {
+  grid-column: 1 / -1;
+  color: var(--text);
+  cursor: pointer;
 }
 
 .experimental-provenance code {
@@ -923,6 +1048,144 @@ button:focus-visible {
 
 .materialization-card .success-chip {
   width: max-content;
+}
+
+/* Readable, task-led hierarchy for the experiment-informed workspace. */
+.experimental-workbench {
+  font-family: Geist, 'PingFang SC', 'Microsoft YaHei', 'Noto Sans CJK SC',
+    'Source Han Sans SC', -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif;
+  font-size: 14px;
+  line-height: 1.5;
+}
+
+.experimental-workbench button,
+.experimental-workbench input,
+.experimental-workbench select,
+.experimental-workbench textarea {
+  font-family: inherit;
+  font-size: 13px;
+}
+
+.experimental-workbench .section-heading h2 {
+  font-size: 22px;
+}
+
+.experimental-workbench .section-heading p,
+.experimental-workbench .panel-empty {
+  font-size: 13px;
+  line-height: 1.55;
+}
+
+.experimental-workbench .eyebrow {
+  font-size: 10px;
+  letter-spacing: 0.07em;
+}
+
+.capability-chip {
+  font-size: 12px;
+}
+
+.experimental-stepper li {
+  font-size: 13px;
+}
+
+.experimental-card .card-heading h3,
+.experimental-candidate-viewer .card-heading h3 {
+  font-size: 15px;
+}
+
+.experimental-card h4,
+.experimental-result-card h4 {
+  font-size: 14px;
+}
+
+.experimental-card label,
+.experimental-review-grid label,
+.experimental-provider-grid label,
+.experimental-advanced label {
+  font-size: 12px;
+}
+
+.experimental-card > small,
+.experimental-field-help,
+.experimental-warning {
+  font-size: 12px;
+}
+
+.experimental-evidence-list > div,
+.experimental-phase-table > div {
+  font-size: 12px;
+}
+
+.experimental-evidence-list code,
+.experimental-catalog-list code,
+.experimental-run-list code,
+.experimental-results > .section-heading > code {
+  font-size: 10px;
+}
+
+.experimental-constraint-list > span,
+.experimental-provider-summary span,
+.experimental-provider-summary button {
+  font-size: 11px;
+}
+
+.experimental-provider-grid p,
+.experimental-provider-grid small,
+.experimental-card .credential-status-line small,
+.experimental-credential-editor > small,
+.experimental-catalog-list small,
+.experimental-run-list small {
+  font-size: 11px;
+}
+
+.credential-status-line strong,
+.experimental-advanced summary {
+  font-size: 12px;
+}
+
+.experimental-metrics span,
+.experimental-plot-legend {
+  font-size: 11px;
+}
+
+.experimental-result-card h3 {
+  font-size: 15px;
+}
+
+.experimental-result-card ul {
+  font-size: 12px;
+  line-height: 1.65;
+}
+
+.experimental-candidate-list label,
+.experimental-candidate-list small,
+.experimental-candidate-list code,
+.experimental-viewer-toolbar,
+.experimental-element-counts span,
+.experimental-provenance {
+  font-size: 11px;
+}
+
+.experimental-element-counts strong {
+  font-size: 13px;
+}
+
+.experimental-structure-summary dt {
+  font-size: 10px;
+}
+
+.experimental-structure-summary dd,
+.experimental-atom-detail {
+  font-size: 11px;
+}
+
+.experimental-review-log > div {
+  font-size: 12px;
+}
+
+.experimental-review-log small {
+  font-size: 11px;
 }
 
 .experimental-empty {
