@@ -2,7 +2,7 @@
 
 ## Status and scientific contract
 
-CatEx `v0.32` provides a local-first vertical slice from inexpensive
+CatEx `v0.33` provides a local-first vertical slice from inexpensive
 characterization evidence to reviewable, DFT-ready representative structures.
 It does **not** claim to reconstruct the unique real atomic structure of a
 heterogeneous material.
@@ -10,8 +10,8 @@ heterogeneous material.
 The implemented contract is:
 
 ```text
-experiment JSON + local evidence artifacts + local structure catalog
-    -> normalized state-aware evidence
+workbench inputs (internally normalized to JSON) + evidence artifacts + structure catalog
+    -> automatically extracted, reviewable evidence constraints
     -> composition-filtered parent structures
     -> transparent single/multiphase XRD hypotheses
     -> bounded candidate recipes
@@ -25,12 +25,20 @@ only into a destination that does not already exist.
 
 ## What is implemented
 
-- Sample lifecycle states: `as_prepared`, `activated`,
-  `operando_approximation`, `post_mortem`, and `unspecified`.
 - Evidence kinds: XRD/GIXRD, ICP, EDS, XPS, Raman, SEM, TEM, synthesis,
   electrochemistry, literature, and other.
 - Evidence roles: hard, soft, and contextual.
-- Bulk, surface, local, and unspecified composition scopes.
+- Independent optional XRD, ICP, EDS, XPS, and TEM inputs; no modality is
+  required just to generate candidates.
+- Automatic extraction from common text/CSV tables, instrument notes, and
+  English or Chinese short conclusions, including explicit phase formulas and
+  Å/nm lattice-spacing conversion.
+  The workbench creates the structured metadata and constraints; users do not
+  write JSON.
+- Total-atomic, metal-normalized, and weight composition bases with bulk,
+  surface, and local scopes.
+- XPS-derived local coordination ranges and TEM/SAED d-spacing ranges as
+  transparent compatibility checks.
 - Path-free evidence identities using SHA-256, artifact basename, and size.
 - Path-confined local structure catalogs with source kind, locator, license,
   citation, artifact hash, and structure hash.
@@ -42,6 +50,8 @@ only into a destination that does not already exist.
   - bounded isotropic strain (at most 10 percent)
   - low-index slab generation with all retained terminations
   - orthogonal c-axis vacuum reset
+  - deterministic composition matching
+  - bounded surface coordination motifs
 - Powder-XRD forward simulation using pymatgen.
 - Explicit nuisance grids for global two-theta shift and Gaussian FWHM.
 - One-to-one matched peaks, missing predicted peaks, and unexplained observed
@@ -56,12 +66,11 @@ only into a destination that does not already exist.
   coordinate details, composition counts, cell lengths, and optional index
   labels.
 
-Sample state is metadata about when a measurement was made, not an extra
-characterization requirement. It prevents measurements from different physical
-objects or stages from being silently combined. This matters when, for example,
-an as-prepared XRD pattern is compared with XPS measured after electrochemical
-activation. If the state is unknown, use `unspecified`; candidate generation is
-still allowed and the uncertainty remains visible in the report.
+Measurement conditions stay attached to each evidence record. If measurements
+came from materially different specimens or treatments, record that fact in
+the short conclusion or instrument/condition field. CatEx keeps those notes
+with the evidence and does not pretend that a generic lifecycle label can
+reconcile incompatible measurements.
 
 ## Deliberate limitations
 
@@ -91,7 +100,6 @@ The JSON document uses `catex.experiment-spec.v1`:
 {
   "schema_version": "catex.experiment-spec.v1",
   "sample_id": "tu-nimo-01",
-  "target_state": "activated",
   "material_pack": "alloy-electrocatalyst",
   "allowed_elements": ["Ni", "Mo", "O"],
   "excluded_elements": [],
@@ -101,14 +109,14 @@ The JSON document uses `catex.experiment-spec.v1`:
       "minimum_atomic_fraction": 0.60,
       "maximum_atomic_fraction": 0.80,
       "scope": "bulk",
-      "evidence_ids": ["icp-as-prepared"]
+      "basis": "total_atomic_fraction",
+      "evidence_ids": ["icp-composition"]
     }
   ],
   "evidence": [
     {
-      "evidence_id": "xrd-as-prepared",
+      "evidence_id": "xrd-pattern",
       "kind": "xrd",
-      "sample_state": "as_prepared",
       "role": "hard",
       "artifact": "xrd.xy",
       "metadata": {
@@ -124,6 +132,12 @@ Unknown fields, duplicate evidence IDs, invalid element symbols, infeasible
 composition intervals, missing artifacts, and artifact path traversal are
 rejected. Artifact paths are resolved relative to the experiment JSON and are
 not serialized into the scientific report.
+
+The JSON form above is primarily an API/CLI contract. In the Web workbench the
+researcher chooses a method, optionally uploads a file, and enters a short
+conclusion and instrument/condition text. CatEx generates this structure,
+displays extracted ranges for correction, and keeps raw spectra or images
+without inventing numerical interpretations it cannot justify.
 
 ## Local structure catalog
 

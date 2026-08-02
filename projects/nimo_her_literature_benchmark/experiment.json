@@ -1,0 +1,92 @@
+{
+  "schema_version": "catex.experiment-spec.v1",
+  "sample_id": "chen-2023-nimo-pa-at-nf",
+  "material_pack": "alloy-electrocatalyst",
+  "allowed_elements": ["Ni", "Mo"],
+  "excluded_elements": [],
+  "composition_constraints": [
+    {
+      "element": "Ni",
+      "minimum_atomic_fraction": 0.76,
+      "maximum_atomic_fraction": 0.84,
+      "scope": "local",
+      "basis": "total_atomic_fraction",
+      "evidence_ids": ["eds-ratio"]
+    },
+    {
+      "element": "Mo",
+      "minimum_atomic_fraction": 0.19,
+      "maximum_atomic_fraction": 0.21,
+      "scope": "local",
+      "basis": "total_atomic_fraction",
+      "evidence_ids": ["eds-ratio"]
+    },
+    {
+      "element": "Ni",
+      "minimum_atomic_fraction": 0.76,
+      "maximum_atomic_fraction": 0.84,
+      "scope": "surface",
+      "basis": "metal_normalized_atomic_fraction",
+      "evidence_ids": ["xps-ratio"]
+    },
+    {
+      "element": "Mo",
+      "minimum_atomic_fraction": 0.19,
+      "maximum_atomic_fraction": 0.21,
+      "scope": "surface",
+      "basis": "metal_normalized_atomic_fraction",
+      "evidence_ids": ["xps-ratio"]
+    }
+  ],
+  "local_environment_constraints": [],
+  "lattice_spacing_constraints": [
+    {
+      "d_spacing_angstrom": 2.08,
+      "tolerance_angstrom": 0.0416,
+      "evidence_ids": ["tem-spacing"]
+    }
+  ],
+  "evidence": [
+    {
+      "evidence_id": "xrd-phase",
+      "kind": "xrd",
+      "role": "context",
+      "metadata": {
+        "brief_conclusion": "All diffraction peaks were indexed to the Ni4Mo phase (JCPDS 65-5480).",
+        "reported_phase_formulas": ["Ni4Mo"],
+        "automatic_extraction": {"method": "transparent-rule-parser-v1"}
+      },
+      "note": "Published phase assignment only; no raw diffraction trace was digitized."
+    },
+    {
+      "evidence_id": "eds-ratio",
+      "kind": "eds",
+      "role": "hard",
+      "metadata": {
+        "brief_conclusion": "EDX reports an atomic Ni:Mo ratio of 4:1.",
+        "automatic_extraction": {"method": "transparent-rule-parser-v1"}
+      },
+      "note": "The interval is CatEx's review tolerance, not a reported experimental uncertainty."
+    },
+    {
+      "evidence_id": "xps-ratio",
+      "kind": "xps",
+      "role": "soft",
+      "metadata": {
+        "brief_conclusion": "XPS reports Mo:Ni = 1:4; metallic Mo and Ni components are present, with unquantified O.",
+        "automatic_extraction": {"method": "transparent-rule-parser-v1"}
+      },
+      "note": "Surface metal-normalized ratio; oxygen was not assigned a fabricated fraction."
+    },
+    {
+      "evidence_id": "tem-spacing",
+      "kind": "tem",
+      "role": "hard",
+      "metadata": {
+        "brief_conclusion": "HRTEM d-spacing = 0.208 nm for the MoNi4 (121) plane.",
+        "automatic_extraction": {"method": "transparent-rule-parser-v1"}
+      },
+      "note": "Converted automatically from 0.208 nm to 2.08 Å."
+    }
+  ]
+}

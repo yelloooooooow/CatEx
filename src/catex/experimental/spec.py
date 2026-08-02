@@ -11,6 +11,7 @@ from types import MappingProxyType
 from typing import Any
 
 from catex.experimental.models import (
+    CompositionBasis,
     CompositionScope,
     ElementConstraint,
     EvidenceArtifact,
@@ -18,7 +19,8 @@ from catex.experimental.models import (
     EvidenceRecord,
     EvidenceRole,
     ExperimentSpec,
-    SampleState,
+    LatticeSpacingConstraint,
+    LocalEnvironmentConstraint,
 )
 
 _TOP_LEVEL_KEYS = {
@@ -29,6 +31,8 @@ _TOP_LEVEL_KEYS = {
     "allowed_elements",
     "excluded_elements",
     "composition_constraints",
+    "local_environment_constraints",
+    "lattice_spacing_constraints",
     "evidence",
 }
 _EVIDENCE_KEYS = {
@@ -45,6 +49,21 @@ _CONSTRAINT_KEYS = {
     "minimum_atomic_fraction",
     "maximum_atomic_fraction",
     "scope",
+    "basis",
+    "evidence_ids",
+}
+_LOCAL_ENVIRONMENT_KEYS = {
+    "element",
+    "neighbor_element",
+    "minimum_site_fraction",
+    "maximum_site_fraction",
+    "cutoff_angstrom",
+    "scope",
+    "evidence_ids",
+}
+_LATTICE_SPACING_KEYS = {
+    "d_spacing_angstrom",
+    "tolerance_angstrom",
     "evidence_ids",
 }
 
@@ -130,7 +149,6 @@ def parse_experiment_spec(
             EvidenceRecord(
                 evidence_id=evidence_id,
                 kind=EvidenceKind(str(item["kind"])),
-                sample_state=SampleState(str(item.get("sample_state", "unspecified"))),
                 role=EvidenceRole(str(item.get("role", "context"))),
                 metadata=_mapping(item.get("metadata", {}), field_name="metadata"),
                 artifact=artifact,
@@ -157,6 +175,65 @@ def parse_experiment_spec(
                 minimum_atomic_fraction=float(item["minimum_atomic_fraction"]),
                 maximum_atomic_fraction=float(item["maximum_atomic_fraction"]),
                 scope=CompositionScope(str(item.get("scope", "bulk"))),
+                basis=CompositionBasis(str(item.get("basis", "total_atomic_fraction"))),
+                evidence_ids=tuple(
+                    str(value)
+                    for value in _sequence(
+                        item.get("evidence_ids", []),
+                        field_name="evidence_ids",
+                    )
+                ),
+            )
+        )
+
+    local_environments: list[LocalEnvironmentConstraint] = []
+    for index, raw_item in enumerate(
+        _sequence(
+            payload.get("local_environment_constraints", []),
+            field_name="local_environment_constraints",
+        )
+    ):
+        item = _mapping(raw_item, field_name=f"local_environment_constraints[{index}]")
+        _reject_unknown(
+            item,
+            _LOCAL_ENVIRONMENT_KEYS,
+            context=f"local_environment_constraints[{index}]",
+        )
+        local_environments.append(
+            LocalEnvironmentConstraint(
+                element=str(item["element"]),
+                neighbor_element=str(item["neighbor_element"]),
+                minimum_site_fraction=float(item["minimum_site_fraction"]),
+                maximum_site_fraction=float(item["maximum_site_fraction"]),
+                cutoff_angstrom=float(item.get("cutoff_angstrom", 2.6)),
+                scope=CompositionScope(str(item.get("scope", "surface"))),
+                evidence_ids=tuple(
+                    str(value)
+                    for value in _sequence(
+                        item.get("evidence_ids", []),
+                        field_name="evidence_ids",
+                    )
+                ),
+            )
+        )
+
+    lattice_spacings: list[LatticeSpacingConstraint] = []
+    for index, raw_item in enumerate(
+        _sequence(
+            payload.get("lattice_spacing_constraints", []),
+            field_name="lattice_spacing_constraints",
+        )
+    ):
+        item = _mapping(raw_item, field_name=f"lattice_spacing_constraints[{index}]")
+        _reject_unknown(
+            item,
+            _LATTICE_SPACING_KEYS,
+            context=f"lattice_spacing_constraints[{index}]",
+        )
+        lattice_spacings.append(
+            LatticeSpacingConstraint(
+                d_spacing_angstrom=float(item["d_spacing_angstrom"]),
+                tolerance_angstrom=float(item["tolerance_angstrom"]),
                 evidence_ids=tuple(
                     str(value)
                     for value in _sequence(
@@ -169,9 +246,10 @@ def parse_experiment_spec(
 
     spec = ExperimentSpec(
         sample_id=str(payload["sample_id"]),
-        target_state=SampleState(str(payload.get("target_state", "unspecified"))),
         evidence=tuple(evidence),
         composition_constraints=tuple(constraints),
+        local_environment_constraints=tuple(local_environments),
+        lattice_spacing_constraints=tuple(lattice_spacings),
         allowed_elements=tuple(
             str(value)
             for value in _sequence(

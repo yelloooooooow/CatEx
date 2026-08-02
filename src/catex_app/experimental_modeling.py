@@ -24,6 +24,7 @@ from catex.experimental import (
     ProviderRegistry,
     RuleCandidatePlanner,
     XRDSearchSettings,
+    extract_characterization_summary,
     fetch_optimade_structures,
     infer_experimental_models,
     load_local_structure_catalog,
@@ -392,6 +393,44 @@ class ExperimentalModelingService:
         root = self._root(project_id) / "evidence"
         return [_read_json(path) for path in sorted(root.glob("evidence-*.json"))]
 
+    def extract_evidence(
+        self,
+        project_id: str,
+        *,
+        evidence_artifact_id: str | None,
+        evidence_id: str,
+        kind: str,
+        conclusion: str,
+        instrument_info: str,
+    ) -> dict[str, Any]:
+        """Return reviewable suggestions from a stored characterization file."""
+
+        _safe_identifier(evidence_id, field="evidence_id")
+        stored = None
+        if evidence_artifact_id is not None:
+            record = self._evidence_record(project_id, evidence_artifact_id)
+            stored = self._root(project_id) / "evidence" / "files" / str(record["stored_filename"])
+        try:
+            return extract_characterization_summary(
+                stored,
+                kind=kind,
+                evidence_id=evidence_id,
+                conclusion=_one_line(
+                    conclusion,
+                    field="conclusion",
+                    maximum=1000,
+                    allow_empty=True,
+                ),
+                instrument_info=_one_line(
+                    instrument_info,
+                    field="instrument_info",
+                    maximum=1000,
+                    allow_empty=True,
+                ),
+            )
+        except (TypeError, ValueError) as exc:
+            raise ExperimentalModelingError(str(exc)) from exc
+
     def _evidence_record(self, project_id: str, evidence_artifact_id: str) -> dict[str, Any]:
         if _EVIDENCE_ID.fullmatch(evidence_artifact_id) is None:
             raise ExperimentalModelingError("evidence_artifact_id has an invalid format")
@@ -695,10 +734,9 @@ class ExperimentalModelingService:
             for item in experiment.spec.evidence
             if item.evidence_id in experiment.artifact_paths and item.kind.value in {"xrd", "gixrd"}
         ]
-        exact = [item for item in xrd_records if item.sample_state is experiment.spec.target_state]
-        if not (exact or xrd_records):
+        if not xrd_records:
             return None
-        selected = sorted(exact or xrd_records, key=lambda item: item.evidence_id)[0]
+        selected = sorted(xrd_records, key=lambda item: item.evidence_id)[0]
         pattern = parse_xrd_path(experiment.artifact_paths[selected.evidence_id])
         x, observed = pattern.arrays()
         observed = observed / max(float(np.max(observed)), 1e-12)

@@ -798,13 +798,6 @@ export interface ReactionAnalysis {
 
 export type RuntimeStatus = 'idle' | 'running' | 'success' | 'warning' | 'review' | 'blocked'
 
-export type ExperimentalSampleState =
-  | 'as_prepared'
-  | 'activated'
-  | 'operando_approximation'
-  | 'post_mortem'
-  | 'unspecified'
-
 export type ExperimentalEvidenceKind =
   | 'xrd'
   | 'gixrd'
@@ -884,7 +877,6 @@ export interface ExperimentalEvidenceArtifact {
 export interface ExperimentalEvidenceInput {
   evidence_id: string
   kind: ExperimentalEvidenceKind
-  sample_state: ExperimentalSampleState
   role: 'hard' | 'soft' | 'context'
   metadata: Record<string, unknown>
   evidence_artifact_id?: string
@@ -896,18 +888,63 @@ export interface ExperimentalCompositionConstraint {
   minimum_atomic_fraction: number
   maximum_atomic_fraction: number
   scope: 'bulk' | 'surface' | 'local' | 'unspecified'
+  basis: 'total_atomic_fraction' | 'metal_normalized_atomic_fraction' | 'weight_fraction'
+  evidence_ids: string[]
+}
+
+export interface ExperimentalLocalEnvironmentConstraint {
+  element: string
+  neighbor_element: string
+  minimum_site_fraction: number
+  maximum_site_fraction: number
+  cutoff_angstrom: number
+  scope: 'surface' | 'local'
+  evidence_ids: string[]
+}
+
+export interface ExperimentalLatticeSpacingConstraint {
+  d_spacing_angstrom: number
+  tolerance_angstrom: number
   evidence_ids: string[]
 }
 
 export interface ExperimentalSpec {
   schema_version: 'catex.experiment-spec.v1'
   sample_id: string
-  target_state: ExperimentalSampleState
   material_pack: string
   allowed_elements: string[]
   excluded_elements: string[]
   composition_constraints: ExperimentalCompositionConstraint[]
+  local_environment_constraints: ExperimentalLocalEnvironmentConstraint[]
+  lattice_spacing_constraints: ExperimentalLatticeSpacingConstraint[]
   evidence: ExperimentalEvidenceInput[]
+}
+
+export interface ExperimentalEvidenceExtraction {
+  schema_version: 'catex.evidence-extraction.v1'
+  metadata: Record<string, unknown>
+  composition_constraints: ExperimentalCompositionConstraint[]
+  local_environment_constraints: ExperimentalLocalEnvironmentConstraint[]
+  lattice_spacing_constraints: ExperimentalLatticeSpacingConstraint[]
+  suggested_elements: string[]
+  notices: string[]
+  automatic: true
+  review_required: true
+}
+
+export interface ExperimentalEvidenceCheck {
+  check_id: string
+  kind: 'xrd' | 'composition' | 'xps' | 'tem' | 'geometry'
+  label: string
+  role: 'hard' | 'soft' | 'context'
+  status: 'within_range' | 'outside_range' | 'not_applicable'
+  score: number | null
+  predicted_value: number | null
+  experimental_minimum: number | null
+  experimental_maximum: number | null
+  unit: string
+  evidence_ids: string[]
+  message: string
 }
 
 export interface ExperimentalSpecRevision {
@@ -961,6 +998,7 @@ export interface ExperimentalCandidateAssessment {
   evidence_score: number
   phase_support_score: number | null
   xrd_directly_applicable: boolean
+  evidence_checks: ExperimentalEvidenceCheck[]
   transformation_sha256s: string[]
   diagnostics: Diagnostic[]
 }

@@ -284,7 +284,9 @@ def _parser() -> argparse.ArgumentParser:
 
 
 def _render_json(report: Report) -> str:
-    return json.dumps(report.to_dict(), indent=2, ensure_ascii=False, sort_keys=True)
+    # ASCII-safe JSON remains valid when a Windows console still uses a legacy
+    # code page; scientific symbols are preserved as standard JSON escapes.
+    return json.dumps(report.to_dict(), indent=2, ensure_ascii=True, sort_keys=True)
 
 
 def _diagnostics_text(report: Report) -> list[str]:
@@ -545,7 +547,6 @@ def _render_experimental_modeling_text(report: ExperimentalModelingReport) -> st
         f"status: {report.status.value}",
         f"claim_ceiling: {report.claim_ceiling.value}",
         f"sample_id: {report.experiment.sample_id}",
-        f"target_state: {report.experiment.target_state.value}",
         f"planner: {report.candidate_plan.planner}",
         f"phase_search_status: {report.phase_search.status if report.phase_search else 'not_run'}",
         f"candidates: {len(report.candidate_assessments)}",

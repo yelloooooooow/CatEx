@@ -8,7 +8,7 @@
 
 **CatEx (Catalysis Exploration Workbench)** 是一个面向周期性催化材料、VASP 和 Slurm HPC 的本地 Web 科研工作台。它把结构准备、VASP 输入、受控远程计算、结果解析和反应自由能分析放进一条可追踪的工作流，同时保留必要的科学判断和提交确认。
 
-> **当前状态：v0.32.2 Research Preview。** 已完成小规模单作业端到端流程、可编辑工作流平台初版和实验约束代表性结构建模 v1，可用于受控试算；它还不是无人值守的生产级高通量平台，也不会替代研究者对结构、计算协议和结果的科学判断。
+> **当前状态：v0.33.0 Research Preview。** 已完成小规模单作业端到端流程、可编辑工作流平台初版和实验约束代表性结构建模 v1，可用于受控试算；它还不是无人值守的生产级高通量平台，也不会替代研究者对结构、计算协议和结果的科学判断。
 
 _CatEx is a local-first web workbench for traceable periodic-catalysis workflows with VASP and Slurm. The current release is a research preview validated for controlled, single-job workflows._
 
@@ -224,20 +224,21 @@ CatEx 尚未发布对应论文或正式软件版本。当前科研使用请记�
 
 欢迎通过 GitHub Issues 提交可复现的缺陷、文档问题和功能建议。请使用合成或充分脱敏的数据，不要附带真实凭据、服务器信息、POTCAR 原文或受版权限制的论文附件。
 
-## Experiment-informed atomistic models (v0.32.2)
+## Experiment-informed atomistic models (v0.33.0)
 
 CatEx now includes a local evidence-to-model vertical slice for representative
-atomistic modeling. It accepts state-aware characterization metadata, raw
-two-column XRD/GIXRD, composition intervals, and a provenance-rich local CIF
-catalog. It returns multiple phase/model hypotheses, bounded structure recipes,
-DFT-ready representatives, unresolved assumptions, and affordable
-next-characterization suggestions.
+atomistic modeling. It accepts independently optional XRD/GIXRD, ICP, EDS,
+XPS, and TEM evidence plus a provenance-rich local CIF catalog. Common
+text/CSV tables and short conclusions are converted into reviewable ranges
+without asking the user to write metadata JSON. It returns multiple
+phase/model hypotheses, bounded structure recipes, DFT-ready representatives,
+unresolved assumptions, and affordable next-characterization suggestions.
 
 The default path is deterministic, offline, and read-only. GPT planning is an
 optional replaceable adapter; arbitrary model-generated code is never executed.
-The project-scoped Web page now supports evidence upload, state-aware spec
-revisions, project/OPTIMADE/Materials Project catalogs, XRD hypothesis plots,
-candidate review, and explicitly approved write-back into the normal structure
+The project-scoped Web page now supports evidence upload and extraction,
+project/OPTIMADE/Materials Project catalogs, XRD hypothesis plots, per-range
+candidate checks, and explicitly approved write-back into the normal structure
 workspace. Provider keys can be verified and stored in the operating-system
 credential manager, remain available across CatEx restarts, and are never
 stored in a project, browser storage, export, or Git. Environment variables
@@ -245,11 +246,13 @@ remain available for automated deployments.
 
 Candidate structures have a read-only 3D inspection panel. It supports atom
 selection, element/index and coordinate inspection, element counts, cell
-lengths, and optional atom-index labels. Sample-state fields use plain-language
-labels and allow an explicit uncertain value; lifecycle metadata improves
-evidence alignment but does not block candidate generation.
+lengths, and optional atom-index labels. The same viewer interaction is used in
+the structure workspace, calculation results, and experimental candidates.
 See [the scientific contract and CLI guide](docs/EXPERIMENT_INFORMED_MODELING.md)
 and the
 [synthetic Ni-Mo acceptance case](projects/nimo_experimental_modeling/README.md).
+An end-to-end literature check based on an electrodeposited Ni4Mo HER electrode
+is available in the
+[Ni–Mo HER literature benchmark](projects/nimo_her_literature_benchmark/README.md).
 The staged scientific validation and implementation roadmap is documented in
 the [Ni–Mo benchmark plan](docs/NIMO_EXPERIMENTAL_MODELING_BENCHMARK.md).

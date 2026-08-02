@@ -14,6 +14,7 @@ import type {
   ExperimentalCatalogSnapshot,
   ExperimentalCredentialMutation,
   ExperimentalEvidenceArtifact,
+  ExperimentalEvidenceExtraction,
   ExperimentalMaterialization,
   ExperimentalModelingCapabilities,
   ExperimentalModelingRun,
@@ -206,6 +207,23 @@ export const api = {
       { method: 'POST', body: form },
     )
   },
+  extractExperimentalEvidence: (
+    projectId: string,
+    payload: {
+      evidence_id: string
+      evidence_artifact_id?: string
+      kind: 'xrd' | 'gixrd' | 'icp' | 'eds' | 'xps' | 'tem'
+      conclusion: string
+      instrument_info: string
+    },
+  ) => requestJson<ExperimentalEvidenceExtraction>(
+    `/api/v1/projects/${projectId}/experimental-modeling/evidence-extraction`,
+    {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify(payload),
+    },
+  ),
   experimentalSpec: async (projectId: string) => {
     const payload = await requestJson<{ revision: ExperimentalSpecRevision | null }>(
       `/api/v1/projects/${projectId}/experimental-modeling/spec`,

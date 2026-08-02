@@ -33,13 +33,18 @@ class ExperimentalEvidenceInput(BaseModel):
         "literature",
         "other",
     ]
-    sample_state: Literal[
-        "as_prepared",
-        "activated",
-        "operando_approximation",
-        "post_mortem",
-        "unspecified",
-    ] = "unspecified"
+    # Accepted only for backward compatibility with stored v1 projects.  The
+    # workbench no longer asks for or uses sample lifecycle labels.
+    sample_state: (
+        Literal[
+            "as_prepared",
+            "activated",
+            "operando_approximation",
+            "post_mortem",
+            "unspecified",
+        ]
+        | None
+    ) = Field(default=None, exclude=True)
     role: Literal["hard", "soft", "context"] = "context"
     metadata: dict[str, Any] = Field(default_factory=dict)
     evidence_artifact_id: str | None = Field(
@@ -56,6 +61,31 @@ class CompositionConstraintInput(BaseModel):
     minimum_atomic_fraction: float = Field(ge=0, le=1)
     maximum_atomic_fraction: float = Field(ge=0, le=1)
     scope: Literal["bulk", "surface", "local", "unspecified"] = "bulk"
+    basis: Literal[
+        "total_atomic_fraction",
+        "metal_normalized_atomic_fraction",
+        "weight_fraction",
+    ] = "total_atomic_fraction"
+    evidence_ids: list[str] = Field(default_factory=list, max_length=100)
+
+
+class LocalEnvironmentConstraintInput(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    element: str = Field(min_length=1, max_length=3)
+    neighbor_element: str = Field(min_length=1, max_length=3)
+    minimum_site_fraction: float = Field(ge=0, le=1)
+    maximum_site_fraction: float = Field(ge=0, le=1)
+    cutoff_angstrom: float = Field(default=2.6, ge=0.5, le=6.0)
+    scope: Literal["surface", "local"] = "surface"
+    evidence_ids: list[str] = Field(default_factory=list, max_length=100)
+
+
+class LatticeSpacingConstraintInput(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    d_spacing_angstrom: float = Field(gt=0, le=100)
+    tolerance_angstrom: float = Field(gt=0, le=100)
     evidence_ids: list[str] = Field(default_factory=list, max_length=100)
 
 
@@ -64,13 +94,17 @@ class ExperimentalSpecRequest(BaseModel):
 
     schema_version: Literal["catex.experiment-spec.v1"] = "catex.experiment-spec.v1"
     sample_id: str = Field(pattern=r"^[A-Za-z0-9][A-Za-z0-9_.:-]{0,127}$")
-    target_state: Literal[
-        "as_prepared",
-        "activated",
-        "operando_approximation",
-        "post_mortem",
-        "unspecified",
-    ] = "unspecified"
+    # Backward-compatible input only; omitted from normalized new records.
+    target_state: (
+        Literal[
+            "as_prepared",
+            "activated",
+            "operando_approximation",
+            "post_mortem",
+            "unspecified",
+        ]
+        | None
+    ) = Field(default=None, exclude=True)
     material_pack: str = Field(
         default="generic",
         pattern=r"^[A-Za-z0-9][A-Za-z0-9_.:-]{0,127}$",
@@ -81,7 +115,28 @@ class ExperimentalSpecRequest(BaseModel):
         default_factory=list,
         max_length=118,
     )
+    local_environment_constraints: list[LocalEnvironmentConstraintInput] = Field(
+        default_factory=list,
+        max_length=200,
+    )
+    lattice_spacing_constraints: list[LatticeSpacingConstraintInput] = Field(
+        default_factory=list,
+        max_length=200,
+    )
     evidence: list[ExperimentalEvidenceInput] = Field(default_factory=list, max_length=200)
+
+
+class EvidenceExtractionRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    evidence_id: str = Field(pattern=r"^[A-Za-z0-9][A-Za-z0-9_.:-]{0,127}$")
+    evidence_artifact_id: str | None = Field(
+        default=None,
+        pattern=r"^evidence-[0-9a-f]{20}$",
+    )
+    kind: Literal["xrd", "gixrd", "icp", "eds", "xps", "tem"]
+    conclusion: str = Field(default="", max_length=1000)
+    instrument_info: str = Field(default="", max_length=1000)
 
 
 class OptimadeSearchRequest(BaseModel):
@@ -220,6 +275,35 @@ def create_experimental_modeling_router(
         await file.close()
         try:
             return service.add_evidence(project_id, file.filename or "", content)
+        except (ProjectStoreError, ExperimentalModelingError) as error:
+            raise _api_error(error, missing_status=404) from error
+
+    @router.post(
+        "/projects/{project_id}/experimental-modeling/evidence/{evidence_artifact_id}/extract"
+    )
+    def extract_evidence(
+        project_id: str,
+        evidence_artifact_id: str,
+        request: EvidenceExtractionRequest,
+    ) -> dict[str, Any]:
+        try:
+            return service.extract_evidence(
+                project_id,
+                **{
+                    **request.model_dump(exclude={"evidence_artifact_id"}),
+                    "evidence_artifact_id": evidence_artifact_id,
+                },
+            )
+        except (ProjectStoreError, ExperimentalModelingError) as error:
+            raise _api_error(error, missing_status=404) from error
+
+    @router.post("/projects/{project_id}/experimental-modeling/evidence-extraction")
+    def extract_evidence_without_required_file(
+        project_id: str,
+        request: EvidenceExtractionRequest,
+    ) -> dict[str, Any]:
+        try:
+            return service.extract_evidence(project_id, **request.model_dump())
         except (ProjectStoreError, ExperimentalModelingError) as error:
             raise _api_error(error, missing_status=404) from error
 

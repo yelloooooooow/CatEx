@@ -237,7 +237,7 @@ _NODE_DEFINITIONS = (
     NodeDefinition(
         "experiment.evidence.prepare",
         "准备实验约束",
-        "在项目实验建模工作区整理样品状态、表征证据和成分区间。",
+        "在项目实验建模工作区整理表征证据、测试条件和成分区间。",
         NodeCategory.EXPERIMENT,
         outputs=(_port("evidence", "实验约束集", PortKind.EXPERIMENT_EVIDENCE_SET),),
     ),

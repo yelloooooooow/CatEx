@@ -7,12 +7,17 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 
-from pymatgen.core import Structure
+from pymatgen.analysis.diffraction.xrd import XRDCalculator
+from pymatgen.core import Element, Structure
 
 from catex.experimental.models import (
     CandidateAssessment,
     ClaimLevel,
+    CompositionBasis,
+    CompositionScope,
+    EvidenceCheck,
     EvidenceKind,
+    EvidenceRole,
     ExperimentSpec,
     InferenceStatus,
     ModelKind,
@@ -153,9 +158,7 @@ def _select_xrd_evidence(
         if item.kind in {EvidenceKind.XRD, EvidenceKind.GIXRD}
         and item.evidence_id in experiment.artifact_paths
     ]
-    exact_state = [item for item in candidates if item.sample_state is experiment.spec.target_state]
-    usable = exact_state or candidates
-    if not usable:
+    if not candidates:
         return (
             None,
             (
@@ -166,9 +169,9 @@ def _select_xrd_evidence(
                 ),
             ),
         )
-    selected = sorted(usable, key=lambda item: item.evidence_id)[0]
+    selected = sorted(candidates, key=lambda item: item.evidence_id)[0]
     diagnostics = []
-    if len(usable) > 1:
+    if len(candidates) > 1:
         diagnostics.append(
             Diagnostic(
                 "EXPERIMENTAL_MODELING_MULTIPLE_XRD_ARTIFACTS",
@@ -176,19 +179,7 @@ def _select_xrd_evidence(
                 "Only one XRD artifact is used by the v1 vertical slice.",
                 {
                     "selected_evidence_id": selected.evidence_id,
-                    "available_evidence_ids": sorted(item.evidence_id for item in usable),
-                },
-            )
-        )
-    if selected.sample_state is not experiment.spec.target_state:
-        diagnostics.append(
-            Diagnostic(
-                "EXPERIMENTAL_MODELING_XRD_STATE_MISMATCH",
-                Severity.WARNING,
-                "The selected diffraction pattern belongs to a different sample state.",
-                {
-                    "pattern_state": selected.sample_state.value,
-                    "target_state": experiment.spec.target_state.value,
+                    "available_evidence_ids": sorted(item.evidence_id for item in candidates),
                 },
             )
         )
@@ -257,7 +248,7 @@ def _next_experiments(
         )
     if EvidenceKind.XPS not in kinds:
         recommendations.append(
-            "Add state-resolved XPS to test surface oxidation/hydroxylation hypotheses."
+            "Add fitted XPS composition or chemical-state results to constrain surface models."
         )
     if EvidenceKind.TEM not in kinds:
         recommendations.append(
@@ -266,8 +257,8 @@ def _next_experiments(
         )
     if any(item.hypothesis_id == "surface-oxygen-unresolved" for item in hypotheses):
         recommendations.append(
-            "Measure XPS before and after activation, and compare with Raman if "
-            "oxide families remain ambiguous."
+            "Add a quantified XPS peak table, and compare with Raman if oxide families "
+            "remain ambiguous."
         )
     if any(item.hypothesis_id == "disordered-motif-ensemble-unresolved" for item in hypotheses):
         recommendations.append(
@@ -277,18 +268,280 @@ def _next_experiments(
     return tuple(dict.fromkeys(recommendations))
 
 
+def _constraint_role(spec: ExperimentSpec, evidence_ids: tuple[str, ...]) -> EvidenceRole:
+    roles = {item.role for item in spec.evidence if item.evidence_id in set(evidence_ids)}
+    if EvidenceRole.HARD in roles:
+        return EvidenceRole.HARD
+    if EvidenceRole.SOFT in roles:
+        return EvidenceRole.SOFT
+    return EvidenceRole.CONTEXT
+
+
+def _interval_score(value: float, lower: float, upper: float) -> tuple[str, float]:
+    if lower <= value <= upper:
+        return "within_range", 1.0
+    width = max(upper - lower, 0.02)
+    distance = lower - value if value < lower else value - upper
+    return "outside_range", max(0.0, 1.0 - distance / width)
+
+
+def _top_region_indices(structure: Structure, *, depth_angstrom: float = 3.0) -> tuple[int, ...]:
+    import numpy as np
+
+    c_vector = np.asarray(structure.lattice.matrix[2], dtype=float)
+    c_hat = c_vector / np.linalg.norm(c_vector)
+    projected = np.asarray(structure.cart_coords, dtype=float) @ c_hat
+    top = float(np.max(projected))
+    return tuple(index for index, value in enumerate(projected) if top - value <= depth_angstrom)
+
+
+def _composition_value(
+    structure: Structure,
+    *,
+    element: str,
+    scope: CompositionScope,
+    basis: CompositionBasis,
+    model_kind: ModelKind,
+) -> float | None:
+    if scope is CompositionScope.BULK and model_kind is ModelKind.SURFACE:
+        return None
+    if scope is CompositionScope.SURFACE:
+        if model_kind is not ModelKind.SURFACE:
+            return None
+        indices = _top_region_indices(structure)
+    else:
+        indices = tuple(range(len(structure)))
+    if not indices:
+        return None
+    if basis is CompositionBasis.WEIGHT_FRACTION:
+        masses = [float(Element(str(structure[index].specie)).atomic_mass) for index in indices]
+        denominator = sum(masses)
+        numerator = sum(
+            mass
+            for index, mass in zip(indices, masses, strict=True)
+            if str(structure[index].specie) == element
+        )
+    else:
+        eligible = list(indices)
+        if basis is CompositionBasis.METAL_NORMALIZED_ATOMIC_FRACTION:
+            eligible = [
+                index for index in indices if Element(str(structure[index].specie)).is_metal
+            ]
+        denominator = float(len(eligible))
+        numerator = float(sum(str(structure[index].specie) == element for index in eligible))
+    return numerator / denominator if denominator else None
+
+
+def _environment_value(
+    structure: Structure,
+    *,
+    element: str,
+    neighbor_element: str,
+    cutoff_angstrom: float,
+    scope: CompositionScope,
+    model_kind: ModelKind,
+) -> float | None:
+    if scope is CompositionScope.SURFACE:
+        if model_kind is not ModelKind.SURFACE:
+            return None
+        indices = _top_region_indices(structure)
+    else:
+        indices = tuple(range(len(structure)))
+    centers = [index for index in indices if str(structure[index].specie) == element]
+    if not centers:
+        return 0.0
+    coordinated = sum(
+        any(
+            str(neighbor.specie) == neighbor_element
+            for neighbor in structure.get_neighbors(structure[index], cutoff_angstrom)
+        )
+        for index in centers
+    )
+    return coordinated / len(centers)
+
+
+def _parent_d_spacings(structure: Structure) -> tuple[float, ...]:
+    pattern = XRDCalculator(wavelength="CuKa", symprec=0).get_pattern(
+        structure,
+        scaled=False,
+        two_theta_range=(5.0, 175.0),
+    )
+    return tuple(sorted({float(item) for item in pattern.d_hkls}, reverse=True))
+
+
+def _evidence_checks(
+    execution: CandidateExecution,
+    spec: ExperimentSpec,
+    registry: ProviderRegistry,
+    phase_support: dict[str, float],
+    phase_search: PhaseSearchReport | None,
+) -> tuple[EvidenceCheck, ...]:
+    checks: list[EvidenceCheck] = []
+    inherited = phase_support.get(execution.recipe.parent_reference_key)
+    if phase_search is not None:
+        xrd_ids = tuple(
+            item.evidence_id
+            for item in spec.evidence
+            if item.kind in {EvidenceKind.XRD, EvidenceKind.GIXRD}
+        )
+        threshold = phase_search.settings.minimum_supported_score
+        value = inherited or 0.0
+        checks.append(
+            EvidenceCheck(
+                check_id="xrd-parent-phase",
+                kind="xrd",
+                label="Parent-phase XRD support",
+                role=_constraint_role(spec, xrd_ids),
+                status="within_range" if value >= threshold else "outside_range",
+                score=max(0.0, min(1.0, value)),
+                predicted_value=value,
+                experimental_minimum=threshold,
+                experimental_maximum=1.0,
+                unit="score",
+                evidence_ids=xrd_ids,
+                message=(
+                    "XRD evaluates the parent crystalline phase; it does not identify "
+                    "this surface termination."
+                    if execution.model_kind is ModelKind.SURFACE
+                    else "The simulated parent phase is compared with the measured powder pattern."
+                ),
+            )
+        )
+    for index, constraint in enumerate(spec.composition_constraints, start=1):
+        value = _composition_value(
+            execution.structure,
+            element=constraint.element,
+            scope=constraint.scope,
+            basis=constraint.basis,
+            model_kind=execution.model_kind,
+        )
+        role = _constraint_role(spec, constraint.evidence_ids)
+        if value is None:
+            status, score = "not_applicable", None
+        else:
+            status, score = _interval_score(
+                value,
+                constraint.minimum_atomic_fraction,
+                constraint.maximum_atomic_fraction,
+            )
+        checks.append(
+            EvidenceCheck(
+                check_id=f"composition-{index}",
+                kind="composition",
+                label=f"{constraint.element} · {constraint.scope.value} · {constraint.basis.value}",
+                role=role,
+                status=status,
+                score=score,
+                predicted_value=value,
+                experimental_minimum=constraint.minimum_atomic_fraction,
+                experimental_maximum=constraint.maximum_atomic_fraction,
+                unit="fraction",
+                evidence_ids=constraint.evidence_ids,
+                message=(
+                    "This model type does not represent the requested spatial composition scope."
+                    if value is None
+                    else "Candidate composition is compared with the entered interval."
+                ),
+            )
+        )
+    for index, constraint in enumerate(spec.local_environment_constraints, start=1):
+        value = _environment_value(
+            execution.structure,
+            element=constraint.element,
+            neighbor_element=constraint.neighbor_element,
+            cutoff_angstrom=constraint.cutoff_angstrom,
+            scope=constraint.scope,
+            model_kind=execution.model_kind,
+        )
+        if value is None:
+            status, score = "not_applicable", None
+        else:
+            status, score = _interval_score(
+                value,
+                constraint.minimum_site_fraction,
+                constraint.maximum_site_fraction,
+            )
+        checks.append(
+            EvidenceCheck(
+                check_id=f"xps-environment-{index}",
+                kind="xps",
+                label=f"{constraint.element} coordinated to {constraint.neighbor_element}",
+                role=_constraint_role(spec, constraint.evidence_ids),
+                status=status,
+                score=score,
+                predicted_value=value,
+                experimental_minimum=constraint.minimum_site_fraction,
+                experimental_maximum=constraint.maximum_site_fraction,
+                unit="site fraction",
+                evidence_ids=constraint.evidence_ids,
+                message=(
+                    "This is a geometric compatibility proxy, not a simulated XPS spectrum."
+                    if value is not None
+                    else "A bulk model is not used to evaluate a surface XPS constraint."
+                ),
+            )
+        )
+    if spec.lattice_spacing_constraints:
+        parent = registry.get_structure(execution.recipe.parent_reference_key)
+        spacings = _parent_d_spacings(parent)
+        for index, constraint in enumerate(spec.lattice_spacing_constraints, start=1):
+            nearest = min(spacings, key=lambda item: abs(item - constraint.d_spacing_angstrom))
+            difference = abs(nearest - constraint.d_spacing_angstrom)
+            lower = constraint.d_spacing_angstrom - constraint.tolerance_angstrom
+            upper = constraint.d_spacing_angstrom + constraint.tolerance_angstrom
+            checks.append(
+                EvidenceCheck(
+                    check_id=f"tem-spacing-{index}",
+                    kind="tem",
+                    label=f"TEM/SAED d = {constraint.d_spacing_angstrom:.3f} Å",
+                    role=_constraint_role(spec, constraint.evidence_ids),
+                    status=(
+                        "within_range"
+                        if difference <= constraint.tolerance_angstrom
+                        else "outside_range"
+                    ),
+                    score=max(0.0, 1.0 - difference / constraint.tolerance_angstrom),
+                    predicted_value=nearest,
+                    experimental_minimum=lower,
+                    experimental_maximum=upper,
+                    unit="Å",
+                    evidence_ids=constraint.evidence_ids,
+                    message=(
+                        "Nearest parent-phase diffraction spacing; a local TEM observation "
+                        "is not a bulk phase fraction."
+                    ),
+                )
+            )
+    checks.append(
+        EvidenceCheck(
+            check_id="geometry",
+            kind="geometry",
+            label="Geometry validation",
+            role=EvidenceRole.HARD,
+            status="within_range" if execution.valid else "outside_range",
+            score=1.0 if execution.valid else 0.0,
+            message="Local geometry and periodic-distance diagnostics.",
+        )
+    )
+    return tuple(checks)
+
+
 def _candidate_assessment(
     execution: CandidateExecution,
     phase_support: dict[str, float],
+    spec: ExperimentSpec,
+    registry: ProviderRegistry,
+    phase_search: PhaseSearchReport | None,
 ) -> CandidateAssessment:
     inherited = phase_support.get(execution.recipe.parent_reference_key)
-    operation_penalty = 0.01 * max(0, len(execution.recipe.operations) - 1)
-    if inherited is None:
-        evidence_score = max(0.0, 0.15 - operation_penalty)
-    elif execution.model_kind is ModelKind.SURFACE:
-        evidence_score = max(0.0, inherited * 0.95 - operation_penalty)
-    else:
-        evidence_score = max(0.0, inherited - operation_penalty)
+    checks = _evidence_checks(execution, spec, registry, phase_support, phase_search)
+    applicable_scores = [
+        item.score for item in checks if item.score is not None and item.kind != "geometry"
+    ]
+    evidence_score = sum(applicable_scores) / len(applicable_scores) if applicable_scores else 0.15
+    hard_failure = any(
+        item.role is EvidenceRole.HARD and item.status == "outside_range" for item in checks
+    )
     xrd_direct = (
         execution.model_kind is ModelKind.BULK
         and len(execution.recipe.operations) == 1
@@ -303,10 +556,11 @@ def _candidate_assessment(
         structure_sha256=structure_hash(execution.structure),
         formula=execution.structure.composition.reduced_formula,
         num_sites=len(execution.structure),
-        valid=execution.valid,
+        valid=execution.valid and not hard_failure,
         evidence_score=evidence_score,
         phase_support_score=inherited,
         xrd_directly_applicable=xrd_direct,
+        evidence_checks=checks,
         transformation_sha256s=execution.transformation_sha256s,
         diagnostics=execution.diagnostics,
     )
@@ -370,7 +624,7 @@ def infer_experimental_models(
         phase_search = search_xrd_phases(
             pattern,
             registry,
-            allowed_elements=experiment.spec.allowed_elements,
+            allowed_elements=experiment.spec.model_elements,
             excluded_elements=experiment.spec.excluded_elements,
             required_elements=experiment.spec.required_bulk_elements,
             settings=xrd_settings,
@@ -398,7 +652,16 @@ def infer_experimental_models(
             )
 
     phase_support = phase_search.ranked_reference_support() if phase_search is not None else {}
-    assessments = tuple(_candidate_assessment(item, phase_support) for item in executions)
+    assessments = tuple(
+        _candidate_assessment(
+            item,
+            phase_support,
+            experiment.spec,
+            registry,
+            phase_search,
+        )
+        for item in executions
+    )
     representative_ids = _representatives(
         assessments,
         maximum_representatives=maximum_representatives,
@@ -410,12 +673,22 @@ def infer_experimental_models(
     if not representative_ids:
         status = InferenceStatus.NO_VALID_CANDIDATES
         claim = ClaimLevel.NO_ATOMIC_CLAIM
-    elif phase_search is None or phase_search.status != "hypotheses_found":
-        status = InferenceStatus.INSUFFICIENT_EVIDENCE
-        claim = ClaimLevel.CANDIDATE_ONLY
-    else:
+    elif phase_search is not None and phase_search.status == "hypotheses_found":
         status = InferenceStatus.READY_FOR_REVIEW
         claim = ClaimLevel.PHASE_FAMILY_SUPPORTED
+    elif any(
+        check.kind in {"composition", "xps", "tem"}
+        and check.status != "not_applicable"
+        for assessment in assessments
+        for check in assessment.evidence_checks
+    ):
+        # Non-XRD evidence can support representative candidates without
+        # supporting a crystallographic phase-family claim.
+        status = InferenceStatus.READY_FOR_REVIEW
+        claim = ClaimLevel.CANDIDATE_ONLY
+    else:
+        status = InferenceStatus.INSUFFICIENT_EVIDENCE
+        claim = ClaimLevel.CANDIDATE_ONLY
     report = ExperimentalModelingReport(
         experiment=experiment.spec,
         status=status,

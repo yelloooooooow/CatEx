@@ -26,12 +26,14 @@ import type {
   ExperimentalCatalogSnapshot,
   ExperimentalCompositionConstraint,
   ExperimentalEvidenceArtifact,
+  ExperimentalEvidenceCheck,
   ExperimentalEvidenceInput,
   ExperimentalEvidenceKind,
+  ExperimentalLatticeSpacingConstraint,
+  ExperimentalLocalEnvironmentConstraint,
   ExperimentalModelingCapabilities,
   ExperimentalModelingRun,
   ExperimentalRunSummary,
-  ExperimentalSampleState,
   ExperimentalSpec,
   ProjectArtifact,
 } from '../types'
@@ -43,25 +45,6 @@ interface ExperimentalModelingWorkbenchProps {
   onMessage: (tone: 'success' | 'error' | 'neutral' | 'warning', message: string) => void
   onArtifactsChanged: () => Promise<void> | void
   onOpenStructures: () => void
-}
-
-const SAMPLE_STATES: ExperimentalSampleState[] = [
-  'as_prepared',
-  'activated',
-  'operando_approximation',
-  'post_mortem',
-  'unspecified',
-]
-
-const SAMPLE_STATE_LABELS: Record<
-  ExperimentalSampleState,
-  { chinese: string; english: string }
-> = {
-  as_prepared: { chinese: '制备后（未进行电化学活化）', english: 'As prepared (before electrochemical activation)' },
-  activated: { chinese: '活化后', english: 'Activated (after electrochemical activation)' },
-  operando_approximation: { chinese: '接近工作态', english: 'Working-state approximation' },
-  post_mortem: { chinese: '反应后', english: 'Post-reaction' },
-  unspecified: { chinese: '未注明 / 不确定', english: 'Not specified / uncertain' },
 }
 
 const EVIDENCE_KINDS: ExperimentalEvidenceKind[] = [
@@ -113,6 +96,21 @@ const COMPOSITION_SCOPE_LABELS: Record<
   unspecified: { chinese: '未注明', english: 'Not specified' },
 }
 
+const COMPOSITION_BASIS_LABELS: Record<
+  ExperimentalCompositionConstraint['basis'],
+  { chinese: string; english: string }
+> = {
+  total_atomic_fraction: { chinese: '全部原子归一化', english: 'All atoms' },
+  metal_normalized_atomic_fraction: { chinese: '仅金属元素归一化', english: 'Metals only' },
+  weight_fraction: { chinese: '质量分数', english: 'Weight fraction' },
+}
+
+const CHECK_STATUS_LABELS: Record<string, { chinese: string; english: string }> = {
+  within_range: { chinese: '符合', english: 'Within range' },
+  outside_range: { chinese: '超出范围', english: 'Outside range' },
+  not_applicable: { chinese: '不适用', english: 'Not applicable' },
+}
+
 const RUN_STATUS_LABELS: Record<string, { chinese: string; english: string }> = {
   ready_for_review: { chinese: '可以确认', english: 'Ready to review' },
   insufficient_evidence: { chinese: '信息不足', english: 'More evidence needed' },
@@ -139,20 +137,30 @@ const SCIENTIFIC_MESSAGE_LABELS: Record<string, string> = {
   'Add ICP-OES or quantified EDS with uncertainty to constrain bulk composition.': '补充带不确定度的 ICP-OES 或定量 EDS，以限定体相成分。',
   'Add laboratory XRD/GIXRD with wavelength, scan range, substrate, and geometry metadata.': '补充实验室 XRD/GIXRD，并记录波长、扫描范围、基底和测试几何。',
   'Acquire a longer-count or geometry-adjusted XRD/GIXRD scan before adding a costly method.': '在增加昂贵表征前，可先延长 XRD/GIXRD 采集时间或调整测试几何。',
-  'Add state-resolved XPS to test surface oxidation/hydroxylation hypotheses.': '补充对应样品阶段的 XPS，以判断表面氧化或羟基化。',
+  'Add surface-sensitive XPS to test oxidation/hydroxylation hypotheses.': '补充表面敏感的 XPS，以判断氧化或羟基化。',
   'Add targeted TEM/SAED lattice-spacing and crystallite-size evidence for leading phases.': '针对主要候选相补充 TEM/SAED 晶面间距和晶粒尺寸。',
   'Measure XPS before and after activation, and compare with Raman if oxide families remain ambiguous.': '比较活化前后的 XPS；若氧化物类型仍不明确，再结合拉曼光谱。',
   'Treat disorder as a motif ensemble; use total scattering/PDF only if candidate-dependent DFT conclusions remain different.': '将无序结构表示为局部构型集合；只有当不同候选导致不同 DFT 结论时，再考虑总散射/PDF。',
 }
 
+const EXTRACTION_NOTICE_LABELS: Record<string, string> = {
+  'The uploaded file is retained, but automatic extraction supports text and CSV files only.': '文件已保留，但目前只会从文本或 CSV 表格中自动提取数值。',
+  'The uploaded text file could not be decoded as UTF-8; enter a short conclusion manually.': '文本文件无法按 UTF-8 读取，请填写简短结论或另存为 UTF-8。',
+  'An oxygen-coordination presence constraint was inferred from the brief conclusion; confirm the range before treating it as mandatory.': '已从简短结论推断出含氧配位，但比例范围仍需确认，不应直接设为强约束。',
+  'No fitted XPS peak table was recognized; the raw spectrum was retained without automatic oxidation-state assignment.': '没有识别到 XPS 拟合峰表；原始谱图已保留，但不会自动指定氧化态。',
+  'A TEM image alone is not converted into a lattice spacing; add a measured d-spacing or a table.': '不会仅凭 TEM 图片自动测量晶格间距；请补充已测量的 d 值或结果表。',
+  'No composition table was recognized; add element ranges manually or use element/value/unit columns.': '没有识别到组成表；可手动补充范围，或使用 element / value / unit 列。',
+}
+
 const DEFAULT_SPEC: ExperimentalSpec = {
   schema_version: 'catex.experiment-spec.v1',
   sample_id: 'sample-1',
-  target_state: 'activated',
-  material_pack: 'alloy-electrocatalyst',
-  allowed_elements: ['Ni', 'Mo'],
+  material_pack: 'surface-catalyst',
+  allowed_elements: [],
   excluded_elements: [],
   composition_constraints: [],
+  local_environment_constraints: [],
+  lattice_spacing_constraints: [],
   evidence: [],
 }
 
@@ -168,6 +176,31 @@ const DEFAULT_XRD_SETTINGS = {
   complexity_penalty: 0.02,
   minimum_supported_score: 0.55,
   ambiguity_margin: 0.03,
+}
+
+function normalizeSpecForEditor(value: ExperimentalSpec): ExperimentalSpec {
+  const legacy = value as ExperimentalSpec & {
+    target_state?: unknown
+    evidence: Array<ExperimentalEvidenceInput & { sample_state?: unknown }>
+  }
+  return {
+    schema_version: 'catex.experiment-spec.v1',
+    sample_id: legacy.sample_id,
+    material_pack: legacy.material_pack,
+    allowed_elements: legacy.allowed_elements,
+    excluded_elements: legacy.excluded_elements,
+    composition_constraints: (legacy.composition_constraints ?? []).map((item) => ({
+      ...item,
+      basis: item.basis ?? 'total_atomic_fraction',
+    })),
+    local_environment_constraints: legacy.local_environment_constraints ?? [],
+    lattice_spacing_constraints: legacy.lattice_spacing_constraints ?? [],
+    evidence: (legacy.evidence ?? []).map((item) => {
+      const current = { ...item } as ExperimentalEvidenceInput & { sample_state?: unknown }
+      delete current.sample_state
+      return current
+    }),
+  }
 }
 
 function parseElements(value: string): string[] {
@@ -196,6 +229,12 @@ function formatTimestamp(value: string): string {
   return Number.isNaN(parsed.getTime()) ? value : parsed.toLocaleString()
 }
 
+function evidenceSummary(item: ExperimentalEvidenceInput, fallback: string): string {
+  if (item.note.trim()) return item.note
+  const instrument = item.metadata.instrument_info
+  return typeof instrument === 'string' && instrument.trim() ? instrument : fallback
+}
+
 function localizedRecord(
   record: Record<string, { chinese: string; english: string }>,
   key: string,
@@ -212,16 +251,46 @@ function localizedScientificMessage(
   return tr(SCIENTIFIC_MESSAGE_LABELS[value] ?? value, value)
 }
 
-function vectorLength(vector: number[]): number {
-  return Math.hypot(...vector)
+function localizedCheckLabel(
+  check: ExperimentalEvidenceCheck,
+  tr: (chinese: string, english: string) => string,
+): string {
+  if (check.kind === 'xrd') return tr('母体物相的 XRD 支持', 'Parent-phase XRD support')
+  if (check.kind === 'geometry') return tr('结构几何检查', 'Geometry validation')
+  if (check.kind === 'tem') return check.label
+  if (check.kind === 'xps') {
+    const match = check.label.match(/^([A-Z][a-z]?) coordinated to ([A-Z][a-z]?)$/)
+    return match
+      ? tr(`${match[1]}–${match[2]} 邻近比例`, `${match[1]} coordinated to ${match[2]}`)
+      : check.label
+  }
+  const [element, scope, basis] = check.label.split(' · ')
+  const scopeLabel = COMPOSITION_SCOPE_LABELS[
+    scope as ExperimentalCompositionConstraint['scope']
+  ]
+  const basisLabel = COMPOSITION_BASIS_LABELS[
+    basis as ExperimentalCompositionConstraint['basis']
+  ]
+  return scopeLabel && basisLabel
+    ? `${element} · ${tr(scopeLabel.chinese, scopeLabel.english)} · ${tr(basisLabel.chinese, basisLabel.english)}`
+    : check.label
 }
 
-function latticeParameters(lattice: number[][]): { a: number; b: number; c: number } {
-  return {
-    a: vectorLength(lattice[0] ?? []),
-    b: vectorLength(lattice[1] ?? []),
-    c: vectorLength(lattice[2] ?? []),
+function localizedCheckMessage(
+  check: ExperimentalEvidenceCheck,
+  tr: (chinese: string, english: string) => string,
+): string {
+  const messages: Record<string, string> = {
+    'XRD evaluates the parent crystalline phase; it does not identify this surface termination.': 'XRD 只检验母体晶相，不能确定这个具体表面终止。',
+    'The simulated parent phase is compared with the measured powder pattern.': '将母体结构的模拟衍射与实验粉末图谱进行比较。',
+    'This model type does not represent the requested spatial composition scope.': '该模型类型不能表示这项表征对应的空间范围。',
+    'Candidate composition is compared with the entered interval.': '候选结构的组成与实验输入范围逐项比较。',
+    'This is a geometric compatibility proxy, not a simulated XPS spectrum.': '这里只检查局域几何是否相容，并未模拟 XPS 谱。',
+    'A bulk model is not used to evaluate a surface XPS constraint.': '体相模型不用于评价表面 XPS 约束。',
+    'Nearest parent-phase diffraction spacing; a local TEM observation is not a bulk phase fraction.': '显示母体结构中最接近的晶面间距；局部 TEM 观察不等同于体相含量。',
+    'Local geometry and periodic-distance diagnostics.': '检查局域几何和周期性边界下的原子间距。',
   }
+  return tr(messages[check.message] ?? check.message, check.message)
 }
 
 interface CredentialEditorProps {
@@ -387,24 +456,32 @@ export function ExperimentalModelingWorkbench({
   const [selectedCatalogIds, setSelectedCatalogIds] = useState<string[]>([])
   const [selectedCandidateIds, setSelectedCandidateIds] = useState<string[]>([])
   const [focusedCandidateId, setFocusedCandidateId] = useState('')
-  const [focusedAtomIndex1Based, setFocusedAtomIndex1Based] = useState<number | null>(null)
-  const [showAtomIndices, setShowAtomIndices] = useState(false)
-
   const [evidenceKind, setEvidenceKind] = useState<ExperimentalEvidenceKind>('xrd')
-  const [evidenceState, setEvidenceState] = useState<ExperimentalSampleState>('activated')
-  const [evidenceRole, setEvidenceRole] = useState<'hard' | 'soft' | 'context'>('hard')
+  const [evidenceRole, setEvidenceRole] = useState<'hard' | 'soft' | 'context'>('soft')
   const [evidenceNote, setEvidenceNote] = useState('')
-  const [evidenceMetadata, setEvidenceMetadata] = useState('{}')
+  const [evidenceInstrumentInfo, setEvidenceInstrumentInfo] = useState('')
   const [evidenceFile, setEvidenceFile] = useState<File | null>(null)
+  const [extractionNotices, setExtractionNotices] = useState<string[]>([])
 
-  const [constraintElement, setConstraintElement] = useState('Ni')
-  const [constraintMinimum, setConstraintMinimum] = useState('45')
-  const [constraintMaximum, setConstraintMaximum] = useState('75')
+  const [constraintElement, setConstraintElement] = useState('')
+  const [constraintMinimum, setConstraintMinimum] = useState('')
+  const [constraintMaximum, setConstraintMaximum] = useState('')
   const [constraintScope, setConstraintScope] = useState<ExperimentalCompositionConstraint['scope']>('bulk')
+  const [constraintBasis, setConstraintBasis] = useState<ExperimentalCompositionConstraint['basis']>('total_atomic_fraction')
+
+  const [environmentElement, setEnvironmentElement] = useState('')
+  const [environmentNeighbor, setEnvironmentNeighbor] = useState('O')
+  const [environmentMinimum, setEnvironmentMinimum] = useState('')
+  const [environmentMaximum, setEnvironmentMaximum] = useState('')
+  const [environmentCutoff, setEnvironmentCutoff] = useState('2.6')
+  const [environmentScope, setEnvironmentScope] = useState<ExperimentalLocalEnvironmentConstraint['scope']>('surface')
+
+  const [spacingValue, setSpacingValue] = useState('')
+  const [spacingTolerance, setSpacingTolerance] = useState('')
 
   const [optimadeUrl, setOptimadeUrl] = useState('')
   const [optimadeProvider, setOptimadeProvider] = useState('optimade')
-  const [providerElements, setProviderElements] = useState('Ni, Mo')
+  const [providerElements, setProviderElements] = useState('')
   const [providerMaximumResults, setProviderMaximumResults] = useState('50')
 
   const [plannerKind, setPlannerKind] = useState<'rule' | 'gpt'>('rule')
@@ -422,35 +499,10 @@ export function ExperimentalModelingWorkbench({
   const focusedCandidate = activeRun?.candidates.find(
     (candidate) => candidate.candidate_id === focusedCandidateId,
   ) ?? null
-  const focusedAtom = focusedCandidate && focusedAtomIndex1Based
-    ? {
-        index: focusedAtomIndex1Based,
-        element: focusedCandidate.viewer.species[focusedAtomIndex1Based - 1],
-        fractional: focusedCandidate.viewer.fractional_coordinates[focusedAtomIndex1Based - 1],
-        cartesian: focusedCandidate.viewer.cartesian_coordinates[focusedAtomIndex1Based - 1],
-      }
-    : null
-  const focusedElementCounts = focusedCandidate
-    ? [...focusedCandidate.viewer.species.reduce((counts, element) => {
-        counts.set(element, (counts.get(element) ?? 0) + 1)
-        return counts
-      }, new Map<string, number>())]
-    : []
-  const focusedLattice = focusedCandidate
-    ? latticeParameters(focusedCandidate.viewer.lattice)
-    : null
-  const stateMismatchCount = spec.evidence.filter(
-    (item) => item.sample_state !== 'unspecified' && item.sample_state !== spec.target_state,
-  ).length
   const approvedIds = useMemo(
     () => new Set(reviews.flatMap((review) => review.approved_candidate_ids)),
     [reviews],
   )
-
-  useEffect(() => {
-    setFocusedAtomIndex1Based(null)
-    setShowAtomIndices(false)
-  }, [focusedCandidateId])
 
   const reportError = (error: unknown, fallback: string) => {
     onMessage('error', error instanceof Error ? error.message : fallback)
@@ -494,10 +546,10 @@ export function ExperimentalModelingWorkbench({
       return retained.length ? retained : catalogRecords.map((item) => item.catalog_id)
     })
     if (revision) {
-      setSpec(revision.spec)
+      const normalized = normalizeSpecForEditor(revision.spec)
+      setSpec(normalized)
       setSpecRevisionId(revision.spec_revision_id)
-      setProviderElements(revision.spec.allowed_elements.join(', '))
-      setEvidenceState(revision.spec.target_state)
+      setProviderElements(normalized.allowed_elements.join(', '))
     } else {
       setSpec(DEFAULT_SPEC)
       setSpecRevisionId('')
@@ -520,7 +572,7 @@ export function ExperimentalModelingWorkbench({
     setBusy('spec')
     try {
       const revision = await api.saveExperimentalSpec(projectId, spec)
-      setSpec(revision.spec)
+      setSpec(normalizeSpecForEditor(revision.spec))
       setSpecRevisionId(revision.spec_revision_id)
       onMessage('success', tr('样品与表征信息已保存。', 'Sample and characterization details saved.'))
       return revision
@@ -536,6 +588,7 @@ export function ExperimentalModelingWorkbench({
     if (!projectId) return
     setBusy('evidence')
     try {
+      const evidenceId = `${evidenceKind}-${Date.now().toString(36)}`
       let artifactId: string | undefined
       if (evidenceFile) {
         const artifact = await api.addExperimentalEvidence(projectId, evidenceFile)
@@ -545,24 +598,98 @@ export function ExperimentalModelingWorkbench({
           ...current.filter((item) => item.evidence_artifact_id !== artifact.evidence_artifact_id),
         ])
       }
-      const metadata = JSON.parse(evidenceMetadata) as unknown
-      if (metadata == null || Array.isArray(metadata) || typeof metadata !== 'object') {
-        throw new Error(tr('高级信息必须是有效的 JSON 对象。', 'Advanced metadata must be a valid JSON object.'))
+      const extractable = new Set<ExperimentalEvidenceKind>([
+        'xrd', 'gixrd', 'icp', 'eds', 'xps', 'tem',
+      ])
+      const extraction = extractable.has(evidenceKind)
+        ? await api.extractExperimentalEvidence(projectId, {
+            evidence_id: evidenceId,
+            ...(artifactId ? { evidence_artifact_id: artifactId } : {}),
+            kind: evidenceKind as 'xrd' | 'gixrd' | 'icp' | 'eds' | 'xps' | 'tem',
+            conclusion: evidenceNote,
+            instrument_info: evidenceInstrumentInfo,
+          })
+        : null
+      const metadata: Record<string, unknown> = extraction?.metadata ?? {
+        ...(evidenceNote ? { brief_conclusion: evidenceNote } : {}),
+        ...(evidenceInstrumentInfo ? { instrument_info: evidenceInstrumentInfo } : {}),
       }
       const evidence: ExperimentalEvidenceInput = {
-        evidence_id: `${evidenceKind}-${Date.now().toString(36)}`,
+        evidence_id: evidenceId,
         kind: evidenceKind,
-        sample_state: evidenceState,
         role: evidenceRole,
-        metadata: metadata as Record<string, unknown>,
+        metadata,
         ...(artifactId ? { evidence_artifact_id: artifactId } : {}),
         note: evidenceNote || evidenceFile?.name || '',
       }
-      setSpec((current) => ({ ...current, evidence: [...current.evidence, evidence] }))
+      const composition = [...spec.composition_constraints]
+        for (const item of extraction?.composition_constraints ?? []) {
+          const key = `${item.element.toLowerCase()}|${item.scope}|${item.basis}`
+          const index = composition.findIndex((record) => (
+            `${record.element.toLowerCase()}|${record.scope}|${record.basis}` === key
+          ))
+          if (index >= 0) composition[index] = item
+          else composition.push(item)
+        }
+      const environments = [...spec.local_environment_constraints]
+        for (const item of extraction?.local_environment_constraints ?? []) {
+          const key = `${item.element.toLowerCase()}|${item.neighbor_element.toLowerCase()}|${item.scope}`
+          const index = environments.findIndex((record) => (
+            `${record.element.toLowerCase()}|${record.neighbor_element.toLowerCase()}|${record.scope}` === key
+          ))
+          if (index >= 0) environments[index] = item
+          else environments.push(item)
+        }
+      const spacings = [...spec.lattice_spacing_constraints]
+        for (const item of extraction?.lattice_spacing_constraints ?? []) {
+          if (!spacings.some((record) => Math.abs(record.d_spacing_angstrom - item.d_spacing_angstrom) < 1e-6)) {
+            spacings.push(item)
+          }
+        }
+      const nextSpec: ExperimentalSpec = {
+        ...spec,
+        allowed_elements: [...new Set([
+          ...spec.allowed_elements,
+          ...(extraction?.suggested_elements ?? []),
+        ])],
+        evidence: [...spec.evidence, evidence],
+        composition_constraints: composition,
+        local_environment_constraints: environments,
+        lattice_spacing_constraints: spacings,
+      }
+      setSpec(nextSpec)
+      if (extraction?.suggested_elements.length) {
+        setProviderElements(nextSpec.allowed_elements.join(', '))
+      }
+      const revision = await api.saveExperimentalSpec(projectId, nextSpec)
+      setSpecRevisionId(revision.spec_revision_id)
+      setExtractionNotices(extraction?.notices ?? [])
       setEvidenceNote('')
-      setEvidenceMetadata('{}')
+      setEvidenceInstrumentInfo('')
       setEvidenceFile(null)
-      onMessage('neutral', tr('已添加这项表征；保存当前信息后生效。', 'Characterization added; save the current details to apply it.'))
+      const extractedConstraintCount = (
+        extraction?.composition_constraints.length ?? 0
+      ) + (extraction?.local_environment_constraints.length ?? 0) + (
+        extraction?.lattice_spacing_constraints.length ?? 0
+      )
+      const inferredElements = extraction?.suggested_elements ?? []
+      const chineseInference = inferredElements.length
+        ? `，并识别到元素 ${inferredElements.join(', ')}`
+        : ''
+      const englishInference = inferredElements.length
+        ? ` and identified ${inferredElements.join(', ')}`
+        : ''
+      onMessage(
+        'neutral',
+        tr(
+          extractedConstraintCount
+            ? `已添加表征${chineseInference}，并提取 ${extractedConstraintCount} 条可用于筛选的数值约束。`
+            : `已添加表征${chineseInference}。信息已结构化保存；暂无可直接用于数值筛选的约束。`,
+          extractedConstraintCount
+            ? `Measurement added${englishInference}, with ${extractedConstraintCount} numeric constraint(s) extracted for screening.`
+            : `Measurement added${englishInference}. The metadata was saved; no numeric screening constraint was inferred.`,
+        ),
+      )
     } catch (error) {
       reportError(error, 'Failed to add evidence.')
     } finally {
@@ -591,6 +718,7 @@ export function ExperimentalModelingWorkbench({
           (item) => !(
             item.element.toLowerCase() === constraintElement.trim().toLowerCase()
             && item.scope === constraintScope
+            && item.basis === constraintBasis
           ),
         ),
         {
@@ -598,12 +726,105 @@ export function ExperimentalModelingWorkbench({
           minimum_atomic_fraction: minimum / 100,
           maximum_atomic_fraction: maximum / 100,
           scope: constraintScope,
+          basis: constraintBasis,
           evidence_ids: current.evidence
             .filter((item) => item.kind === 'icp' || item.kind === 'eds' || item.kind === 'xps')
             .map((item) => item.evidence_id),
         },
       ],
     }))
+  }
+
+  const addEnvironmentConstraint = () => {
+    const minimum = Number(environmentMinimum)
+    const maximum = Number(environmentMaximum)
+    const cutoff = Number(environmentCutoff)
+    if (
+      !environmentElement.trim()
+      || !environmentNeighbor.trim()
+      || !Number.isFinite(minimum)
+      || !Number.isFinite(maximum)
+      || !Number.isFinite(cutoff)
+      || minimum < 0
+      || maximum > 100
+      || minimum > maximum
+      || cutoff < 0.5
+      || cutoff > 6
+    ) {
+      onMessage('error', tr('请输入有效的局域环境比例和截断距离。', 'Enter a valid local-environment range and cutoff.'))
+      return
+    }
+    const record: ExperimentalLocalEnvironmentConstraint = {
+      element: environmentElement.trim(),
+      neighbor_element: environmentNeighbor.trim(),
+      minimum_site_fraction: minimum / 100,
+      maximum_site_fraction: maximum / 100,
+      cutoff_angstrom: cutoff,
+      scope: environmentScope,
+      evidence_ids: spec.evidence.filter((item) => item.kind === 'xps').map((item) => item.evidence_id),
+    }
+    setSpec((current) => ({
+      ...current,
+      local_environment_constraints: [
+        ...current.local_environment_constraints.filter((item) => !(
+          item.element.toLowerCase() === record.element.toLowerCase()
+          && item.neighbor_element.toLowerCase() === record.neighbor_element.toLowerCase()
+          && item.scope === record.scope
+        )),
+        record,
+      ],
+    }))
+  }
+
+  const addSpacingConstraint = () => {
+    const spacing = Number(spacingValue)
+    const tolerance = Number(spacingTolerance)
+    if (!Number.isFinite(spacing) || spacing <= 0 || !Number.isFinite(tolerance) || tolerance <= 0 || tolerance > spacing) {
+      onMessage('error', tr('请输入有效的晶格间距和容差。', 'Enter a valid lattice spacing and tolerance.'))
+      return
+    }
+    const record: ExperimentalLatticeSpacingConstraint = {
+      d_spacing_angstrom: spacing,
+      tolerance_angstrom: tolerance,
+      evidence_ids: spec.evidence.filter((item) => item.kind === 'tem').map((item) => item.evidence_id),
+    }
+    setSpec((current) => ({
+      ...current,
+      lattice_spacing_constraints: [
+        ...current.lattice_spacing_constraints.filter((item) => Math.abs(item.d_spacing_angstrom - spacing) > 1e-6),
+        record,
+      ],
+    }))
+  }
+
+  const removeEvidence = async (evidenceId: string) => {
+    if (!projectId) return
+    const previous = spec
+    const nextSpec: ExperimentalSpec = {
+      ...spec,
+      evidence: spec.evidence.filter((item) => item.evidence_id !== evidenceId),
+      composition_constraints: spec.composition_constraints
+        .map((item) => ({ ...item, evidence_ids: item.evidence_ids.filter((value) => value !== evidenceId) }))
+        .filter((item) => item.evidence_ids.length > 0),
+      local_environment_constraints: spec.local_environment_constraints
+        .map((item) => ({ ...item, evidence_ids: item.evidence_ids.filter((value) => value !== evidenceId) }))
+        .filter((item) => item.evidence_ids.length > 0),
+      lattice_spacing_constraints: spec.lattice_spacing_constraints
+        .map((item) => ({ ...item, evidence_ids: item.evidence_ids.filter((value) => value !== evidenceId) }))
+        .filter((item) => item.evidence_ids.length > 0),
+    }
+    setSpec(nextSpec)
+    setBusy('evidence')
+    try {
+      const revision = await api.saveExperimentalSpec(projectId, nextSpec)
+      setSpecRevisionId(revision.spec_revision_id)
+      onMessage('neutral', tr('表征及其自动约束已移除。', 'Measurement and its extracted constraints removed.'))
+    } catch (error) {
+      setSpec(previous)
+      reportError(error, 'Failed to remove evidence.')
+    } finally {
+      setBusy(null)
+    }
   }
 
   const saveCredential = async (
@@ -804,7 +1025,7 @@ export function ExperimentalModelingWorkbench({
 
       <ol className="experimental-stepper">
         {[
-          tr('填写样品信息', 'Describe sample'),
+          tr('填写建模范围', 'Define scope'),
           tr('添加表征', 'Add measurements'),
           tr('准备参考结构', 'Prepare references'),
           tr('生成候选', 'Generate candidates'),
@@ -813,20 +1034,18 @@ export function ExperimentalModelingWorkbench({
       </ol>
 
       <div className="experimental-grid">
-        <article className="experimental-card">
+        <article className="experimental-card experimental-card-wide experimental-scope-card">
           <div className="card-heading">
-            <div><span className="eyebrow">{tr('第 1 步', 'Step 1')}</span><h3>{tr('样品信息', 'Sample details')}</h3></div>
+            <div><span className="eyebrow">{tr('第 1 步', 'Step 1')}</span><h3>{tr('样品与建模范围', 'Sample and modeling scope')}</h3></div>
             <Beaker size={18} />
           </div>
           <div className="experimental-form-grid">
             <label>{tr('样品名称或编号', 'Sample name or ID')}<input value={spec.sample_id} onChange={(event) => setSpec((current) => ({ ...current, sample_id: event.target.value }))} /></label>
-            <label>{tr('模型要表示的阶段', 'Stage to represent')}<select value={spec.target_state} onChange={(event) => setSpec((current) => ({ ...current, target_state: event.target.value as ExperimentalSampleState }))}>{SAMPLE_STATES.map((item) => <option key={item} value={item}>{tr(SAMPLE_STATE_LABELS[item].chinese, SAMPLE_STATE_LABELS[item].english)}</option>)}</select></label>
-            <label>{tr('材料类型', 'Material type')}<select value={spec.material_pack} onChange={(event) => setSpec((current) => ({ ...current, material_pack: event.target.value }))}><option value="generic">{tr('通用材料', 'General material')}</option><option value="alloy-electrocatalyst">{tr('合金电催化剂', 'Alloy electrocatalyst')}</option></select></label>
+            <label>{tr('材料类型', 'Material type')}<select value={spec.material_pack} onChange={(event) => setSpec((current) => ({ ...current, material_pack: event.target.value }))}><option value="generic">{tr('体相材料', 'Bulk material')}</option><option value="surface-catalyst">{tr('表面催化材料', 'Surface catalyst')}</option><option value="alloy-electrocatalyst">{tr('合金或掺杂催化材料', 'Alloy or doped catalyst')}</option></select></label>
             <label>{tr('主要元素', 'Main elements')}<input value={spec.allowed_elements.join(', ')} onChange={(event) => setSpec((current) => ({ ...current, allowed_elements: parseElements(event.target.value) }))} /></label>
             <label>{tr('不应出现的元素（可选）', 'Excluded elements (optional)')}<input value={spec.excluded_elements.join(', ')} onChange={(event) => setSpec((current) => ({ ...current, excluded_elements: parseElements(event.target.value) }))} placeholder="Na, Cl" /></label>
           </div>
-          <small className="experimental-field-help">{tr('若不确定样品阶段，可选择“未注明 / 不确定”，仍可继续生成候选。', 'If the sample stage is uncertain, select “Not specified / uncertain” and continue.')}</small>
-          {stateMismatchCount > 0 && <div className="experimental-warning"><TriangleAlert size={15} /> {tr(`${stateMismatchCount} 条证据来自其他样品状态；推断时将保留这一差异。`, `${stateMismatchCount} evidence record(s) belong to another sample state; the mismatch remains explicit.`)}</div>}
+          <small className="experimental-field-help">{tr('主要元素可先留空；添加组成表或明确的物相结论后会自动补全。材料类型只决定生成体相模型还是同时生成表面变体。', 'Main elements may be left blank and are filled from composition tables or explicit phase conclusions. Material type only controls bulk versus surface variants.')}</small>
           <button className="secondary-button accent" disabled={busy !== null} onClick={() => void saveSpec()} type="button">
             {busy === 'spec' ? <LoaderCircle className="spin" size={15} /> : <Save size={15} />}
             {tr('保存当前信息', 'Save current details')}
@@ -841,45 +1060,80 @@ export function ExperimentalModelingWorkbench({
           </div>
           <div className="experimental-evidence-composer">
             <label>{tr('表征方法', 'Method')}<select value={evidenceKind} onChange={(event) => setEvidenceKind(event.target.value as ExperimentalEvidenceKind)}>{EVIDENCE_KINDS.map((item) => <option key={item} value={item}>{tr(EVIDENCE_KIND_LABELS[item].chinese, EVIDENCE_KIND_LABELS[item].english)}</option>)}</select></label>
-            <label>{tr('测量时的样品阶段', 'Sample stage when measured')}<select value={evidenceState} onChange={(event) => setEvidenceState(event.target.value as ExperimentalSampleState)}>{SAMPLE_STATES.map((item) => <option key={item} value={item}>{tr(SAMPLE_STATE_LABELS[item].chinese, SAMPLE_STATE_LABELS[item].english)}</option>)}</select></label>
             <label>{tr('这项数据如何使用', 'How to use this data')}<select value={evidenceRole} onChange={(event) => setEvidenceRole(event.target.value as 'hard' | 'soft' | 'context')}><option value="hard">{tr(EVIDENCE_ROLE_LABELS.hard.chinese, EVIDENCE_ROLE_LABELS.hard.english)}</option><option value="soft">{tr(EVIDENCE_ROLE_LABELS.soft.chinese, EVIDENCE_ROLE_LABELS.soft.english)}</option><option value="context">{tr(EVIDENCE_ROLE_LABELS.context.chinese, EVIDENCE_ROLE_LABELS.context.english)}</option></select></label>
-            <label className="file-field"><span>{tr('数据文件（可选）', 'Data file (optional)')}</span><input onChange={(event) => setEvidenceFile(event.target.files?.[0] ?? null)} type="file" /></label>
-            <label className="wide">{tr('结果摘要', 'Result summary')}<input value={evidenceNote} onChange={(event) => setEvidenceNote(event.target.value)} placeholder={tr('例如：Cu Kα；活化后出现宽峰', 'e.g. Cu Kα; broad peak after activation')} /></label>
-            <details className="experimental-advanced wide">
-              <summary>{tr('高级信息（可选）', 'Advanced information (optional)')}</summary>
-              <label>{tr('结构化 JSON', 'Structured JSON')}<textarea className="mono-input" rows={3} value={evidenceMetadata} onChange={(event) => setEvidenceMetadata(event.target.value)} /></label>
-            </details>
-            <button className="secondary-button" disabled={busy !== null} onClick={() => void addEvidenceToDraft()} type="button"><Plus size={15} /> {tr('添加这项表征', 'Add measurement')}</button>
+            <label className="file-field"><span>{tr('数据文件或结果表（可选）', 'Data file or result table (optional)')}</span><input onChange={(event) => setEvidenceFile(event.target.files?.[0] ?? null)} type="file" /></label>
+            <label className="wide">{tr('简短结论（可选）', 'Brief conclusion (optional)')}<input value={evidenceNote} onChange={(event) => setEvidenceNote(event.target.value)} placeholder={tr('例如：Mo–O存在；d = 2.03 ± 0.05 Å', 'e.g. Mo–O is present; d = 2.03 ± 0.05 Å')} /></label>
+            <label className="wide">{tr('仪器与测试条件（可选）', 'Instrument and measurement conditions (optional)')}<input value={evidenceInstrumentInfo} onChange={(event) => setEvidenceInstrumentInfo(event.target.value)} placeholder={tr('例如：Cu Kα；GIXRD入射角0.5°；Ni网基底', 'e.g. Cu Kα; GIXRD 0.5° incidence; Ni mesh substrate')} /></label>
+            <button className="secondary-button accent" disabled={busy !== null || (!evidenceFile && !evidenceNote.trim() && !evidenceInstrumentInfo.trim())} onClick={() => void addEvidenceToDraft()} type="button">{busy === 'evidence' ? <LoaderCircle className="spin" size={15} /> : <Plus size={15} />} {tr('添加并自动提取', 'Add and extract')}</button>
           </div>
-          <small className="experimental-field-help">{tr('样品阶段用于区分制备后、活化后和反应后的数据；不知道时可选“未注明 / 不确定”。', 'The sample stage separates as-prepared, activated, and post-reaction measurements. Choose “Not specified / uncertain” when unknown.')}</small>
+          <small className="experimental-field-help">{tr('数据文件、简短结论或仪器信息至少提供一项。CatEx会从常见CSV/文本表格和明确结论中提取可检查信息；原始XPS谱和TEM图片不会被无依据自动判读。', 'Provide at least a data file, short conclusion, or instrument note. CatEx extracts reviewable values from common CSV/text tables and explicit conclusions; it does not guess oxidation states from raw XPS or lattice spacings from a TEM image.')}</small>
+          {extractionNotices.map((notice) => <div className="experimental-warning" key={notice}><TriangleAlert size={15} /> {tr(EXTRACTION_NOTICE_LABELS[notice] ?? notice, notice)}</div>)}
 
           <div className="experimental-evidence-list">
             {spec.evidence.map((item) => (
-              <div className={item.sample_state !== 'unspecified' && item.sample_state !== spec.target_state ? 'mismatch' : ''} key={item.evidence_id}>
+              <div key={item.evidence_id}>
                 <span className={`evidence-role role-${item.role}`}>{tr(EVIDENCE_ROLE_LABELS[item.role].chinese, EVIDENCE_ROLE_LABELS[item.role].english)}</span>
                 <strong>{tr(EVIDENCE_KIND_LABELS[item.kind].chinese, EVIDENCE_KIND_LABELS[item.kind].english)}</strong>
-                <span>{tr(SAMPLE_STATE_LABELS[item.sample_state].chinese, SAMPLE_STATE_LABELS[item.sample_state].english)}</span>
-                <span>{item.note || tr('未填写摘要', 'No summary')}</span>
-                {item.evidence_artifact_id && <code>{item.evidence_artifact_id}</code>}
-                <button aria-label={tr('删除这项表征', 'Remove measurement')} onClick={() => setSpec((current) => ({ ...current, evidence: current.evidence.filter((record) => record.evidence_id !== item.evidence_id) }))} type="button"><Trash2 size={14} /></button>
+                <span>{evidenceSummary(item, tr('未填写摘要', 'No summary'))}</span>
+                <span className="evidence-source">{item.evidence_artifact_id
+                  ? tr('已上传文件', 'Uploaded file')
+                  : item.metadata.brief_conclusion
+                    ? tr('人工结论', 'Manual conclusion')
+                    : tr('仪器信息', 'Instrument note')}</span>
+                <button aria-label={tr('删除这项表征', 'Remove measurement')} disabled={busy !== null} onClick={() => void removeEvidence(item.evidence_id)} type="button"><Trash2 size={14} /></button>
               </div>
             ))}
             {!spec.evidence.length && <p className="panel-empty">{tr('还没有添加表征数据。建议优先添加 XRD、ICP、XPS 和 TEM；缺少某一项也可以继续。', 'No measurements added. Start with XRD, ICP, XPS, and TEM when available; missing data does not block the workflow.')}</p>}
           </div>
 
-          <h4 className="experimental-subheading">{tr('成分范围（可选）', 'Composition range (optional)')}</h4>
-          <div className="experimental-constraint-composer">
-            <label>{tr('元素', 'Element')}<input value={constraintElement} onChange={(event) => setConstraintElement(event.target.value)} /></label>
-            <label>{tr('最低含量（at.%）', 'Minimum (at.%)')}<input min="0" max="100" step="0.1" type="number" value={constraintMinimum} onChange={(event) => setConstraintMinimum(event.target.value)} /></label>
-            <label>{tr('最高含量（at.%）', 'Maximum (at.%)')}<input min="0" max="100" step="0.1" type="number" value={constraintMaximum} onChange={(event) => setConstraintMaximum(event.target.value)} /></label>
-            <label>{tr('数据范围', 'Measurement scope')}<select value={constraintScope} onChange={(event) => setConstraintScope(event.target.value as ExperimentalCompositionConstraint['scope'])}>{Object.entries(COMPOSITION_SCOPE_LABELS).map(([value, label]) => <option key={value} value={value}>{tr(label.chinese, label.english)}</option>)}</select></label>
-            <button className="secondary-button" onClick={addConstraint} type="button"><Plus size={15} /> {tr('添加范围', 'Add range')}</button>
-          </div>
-          <div className="experimental-constraint-list">
-            {spec.composition_constraints.map((item) => (
-              <span key={`${item.element}-${item.scope}`}>{item.element} · {(item.minimum_atomic_fraction * 100).toFixed(1)}–{(item.maximum_atomic_fraction * 100).toFixed(1)} at.% · {tr(COMPOSITION_SCOPE_LABELS[item.scope].chinese, COMPOSITION_SCOPE_LABELS[item.scope].english)}<button aria-label={tr('删除成分范围', 'Remove composition range')} onClick={() => setSpec((current) => ({ ...current, composition_constraints: current.composition_constraints.filter((record) => record !== item) }))} type="button">×</button></span>
-            ))}
-          </div>
+          <details className="experimental-constraint-editor" open={Boolean(spec.composition_constraints.length || spec.local_environment_constraints.length || spec.lattice_spacing_constraints.length)}>
+            <summary>{tr('检查或补充自动提取结果', 'Review or add extracted constraints')}</summary>
+
+            <h4 className="experimental-subheading">{tr('组成范围 · ICP / EDS / XPS', 'Composition · ICP / EDS / XPS')}</h4>
+            <div className="experimental-constraint-composer">
+              <label>{tr('元素', 'Element')}<input value={constraintElement} onChange={(event) => setConstraintElement(event.target.value)} /></label>
+              <label>{tr('最低（%）', 'Minimum (%)')}<input min="0" max="100" step="0.1" type="number" value={constraintMinimum} onChange={(event) => setConstraintMinimum(event.target.value)} /></label>
+              <label>{tr('最高（%）', 'Maximum (%)')}<input min="0" max="100" step="0.1" type="number" value={constraintMaximum} onChange={(event) => setConstraintMaximum(event.target.value)} /></label>
+              <label>{tr('空间范围', 'Spatial scope')}<select value={constraintScope} onChange={(event) => setConstraintScope(event.target.value as ExperimentalCompositionConstraint['scope'])}>{Object.entries(COMPOSITION_SCOPE_LABELS).map(([value, label]) => <option key={value} value={value}>{tr(label.chinese, label.english)}</option>)}</select></label>
+              <label>{tr('归一化方式', 'Composition basis')}<select value={constraintBasis} onChange={(event) => setConstraintBasis(event.target.value as ExperimentalCompositionConstraint['basis'])}>{Object.entries(COMPOSITION_BASIS_LABELS).map(([value, label]) => <option key={value} value={value}>{tr(label.chinese, label.english)}</option>)}</select></label>
+              <button className="secondary-button" onClick={addConstraint} type="button"><Plus size={15} /> {tr('添加组成范围', 'Add composition')}</button>
+            </div>
+            <div className="experimental-constraint-list">
+              {spec.composition_constraints.map((item) => (
+                <span key={`${item.element}-${item.scope}-${item.basis}`}>{item.element} · {(item.minimum_atomic_fraction * 100).toFixed(1)}–{(item.maximum_atomic_fraction * 100).toFixed(1)}% · {tr(COMPOSITION_SCOPE_LABELS[item.scope].chinese, COMPOSITION_SCOPE_LABELS[item.scope].english)} · {tr(COMPOSITION_BASIS_LABELS[item.basis].chinese, COMPOSITION_BASIS_LABELS[item.basis].english)}<button aria-label={tr('删除成分范围', 'Remove composition range')} onClick={() => setSpec((current) => ({ ...current, composition_constraints: current.composition_constraints.filter((record) => record !== item) }))} type="button">×</button></span>
+              ))}
+            </div>
+
+            <h4 className="experimental-subheading">{tr('局域化学环境 · XPS', 'Local chemistry · XPS')}</h4>
+            <p className="experimental-field-help">{tr('例如“Mo中有30–60%与O相邻”。这只是几何相容性检查，不等同于模拟XPS谱。', 'For example, “30–60% of Mo sites neighbor O.” This is a geometric compatibility check, not a simulated XPS spectrum.')}</p>
+            <div className="experimental-constraint-composer">
+              <label>{tr('中心元素', 'Center element')}<input value={environmentElement} onChange={(event) => setEnvironmentElement(event.target.value)} /></label>
+              <label>{tr('邻近元素', 'Neighbor element')}<input value={environmentNeighbor} onChange={(event) => setEnvironmentNeighbor(event.target.value)} /></label>
+              <label>{tr('最低比例（%）', 'Minimum (%)')}<input min="0" max="100" step="0.1" type="number" value={environmentMinimum} onChange={(event) => setEnvironmentMinimum(event.target.value)} /></label>
+              <label>{tr('最高比例（%）', 'Maximum (%)')}<input min="0" max="100" step="0.1" type="number" value={environmentMaximum} onChange={(event) => setEnvironmentMaximum(event.target.value)} /></label>
+              <label>{tr('邻近距离（Å）', 'Neighbor cutoff (Å)')}<input min="0.5" max="6" step="0.1" type="number" value={environmentCutoff} onChange={(event) => setEnvironmentCutoff(event.target.value)} /></label>
+              <label>{tr('空间范围', 'Spatial scope')}<select value={environmentScope} onChange={(event) => setEnvironmentScope(event.target.value as ExperimentalLocalEnvironmentConstraint['scope'])}><option value="surface">{tr('表面', 'Surface')}</option><option value="local">{tr('局部模型', 'Local model')}</option></select></label>
+              <button className="secondary-button" onClick={addEnvironmentConstraint} type="button"><Plus size={15} /> {tr('添加局域环境', 'Add environment')}</button>
+            </div>
+            <div className="experimental-constraint-list">
+              {spec.local_environment_constraints.map((item) => (
+                <span key={`${item.element}-${item.neighbor_element}-${item.scope}`}>{item.element}–{item.neighbor_element} · {(item.minimum_site_fraction * 100).toFixed(1)}–{(item.maximum_site_fraction * 100).toFixed(1)}% · ≤ {item.cutoff_angstrom.toFixed(2)} Å<button aria-label={tr('删除局域环境', 'Remove local environment')} onClick={() => setSpec((current) => ({ ...current, local_environment_constraints: current.local_environment_constraints.filter((record) => record !== item) }))} type="button">×</button></span>
+              ))}
+            </div>
+
+            <h4 className="experimental-subheading">{tr('晶格间距 · TEM / SAED', 'Lattice spacing · TEM / SAED')}</h4>
+            <div className="experimental-constraint-composer compact">
+              <label>d (Å)<input min="0" step="0.001" type="number" value={spacingValue} onChange={(event) => setSpacingValue(event.target.value)} /></label>
+              <label>{tr('容差（Å）', 'Tolerance (Å)')}<input min="0" step="0.001" type="number" value={spacingTolerance} onChange={(event) => setSpacingTolerance(event.target.value)} /></label>
+              <button className="secondary-button" onClick={addSpacingConstraint} type="button"><Plus size={15} /> {tr('添加晶格间距', 'Add spacing')}</button>
+            </div>
+            <div className="experimental-constraint-list">
+              {spec.lattice_spacing_constraints.map((item) => (
+                <span key={`${item.d_spacing_angstrom}-${item.tolerance_angstrom}`}>d = {item.d_spacing_angstrom.toFixed(3)} ± {item.tolerance_angstrom.toFixed(3)} Å<button aria-label={tr('删除晶格间距', 'Remove lattice spacing')} onClick={() => setSpec((current) => ({ ...current, lattice_spacing_constraints: current.lattice_spacing_constraints.filter((record) => record !== item) }))} type="button">×</button></span>
+              ))}
+            </div>
+            <button className="secondary-button accent experimental-save-constraints" disabled={busy !== null} onClick={() => void saveSpec()} type="button"><Save size={15} /> {tr('保存校对结果', 'Save reviewed values')}</button>
+          </details>
         </article>
 
         <article className="experimental-card experimental-card-wide">
@@ -894,28 +1148,36 @@ export function ExperimentalModelingWorkbench({
           </div>
           <div className="experimental-provider-grid">
             <section>
-              <h4>OPTIMADE</h4>
-              <p>{tr('从支持 OPTIMADE 的数据库搜索结构。', 'Search a database that supports OPTIMADE.')}</p>
-              <label>{tr('数据库地址', 'Database URL')}<input placeholder="https://provider.example" value={optimadeUrl} onChange={(event) => setOptimadeUrl(event.target.value)} /></label>
-              <label>{tr('来源名称', 'Source name')}<input value={optimadeProvider} onChange={(event) => setOptimadeProvider(event.target.value)} /></label>
-              <label>{tr('包含元素', 'Elements')}<input value={providerElements} onChange={(event) => setProviderElements(event.target.value)} /></label>
-              <button className="secondary-button" disabled={busy !== null || !optimadeUrl.trim()} onClick={() => void fetchOptimade()} type="button">{busy === 'optimade' ? <LoaderCircle className="spin" size={15} /> : <Search size={15} />}{tr('搜索 OPTIMADE', 'Search OPTIMADE')}</button>
+              <details className="experimental-provider-panel">
+                <summary><strong>OPTIMADE</strong><span>{tr('其他开放结构数据库', 'Other open structure databases')}</span></summary>
+                <div>
+                  <p>{tr('从支持 OPTIMADE 的数据库搜索结构。', 'Search a database that supports OPTIMADE.')}</p>
+                  <label>{tr('数据库地址', 'Database URL')}<input placeholder="https://provider.example" value={optimadeUrl} onChange={(event) => setOptimadeUrl(event.target.value)} /></label>
+                  <label>{tr('来源名称', 'Source name')}<input value={optimadeProvider} onChange={(event) => setOptimadeProvider(event.target.value)} /></label>
+                  <label>{tr('包含元素', 'Elements')}<input value={providerElements} onChange={(event) => setProviderElements(event.target.value)} /></label>
+                  <button className="secondary-button" disabled={busy !== null || !optimadeUrl.trim() || !providerElements.trim()} onClick={() => void fetchOptimade()} type="button">{busy === 'optimade' ? <LoaderCircle className="spin" size={15} /> : <Search size={15} />}{tr('搜索 OPTIMADE', 'Search OPTIMADE')}</button>
+                </div>
+              </details>
             </section>
             <section>
-              <h4>Materials Project</h4>
-              <p>{tr('搜索已知晶体结构。API 密钥只保存在本机系统密钥库。', 'Search known crystal structures. The API key is stored only in the system credential manager.')}</p>
-              <CredentialEditor
-                busy={busy === 'credential-materials_project'}
-                onDelete={deleteCredential}
-                onSave={saveCredential}
-                provider="materials_project"
-                savedToSystem={capabilities?.providers.materials_project.saved_to_system ?? false}
-                source={capabilities?.providers.materials_project.credential_source ?? null}
-                storeAvailable={capabilities?.credential_store.available ?? false}
-              />
-              <label>{tr('最多返回', 'Maximum results')}<input min="1" max="1000" type="number" value={providerMaximumResults} onChange={(event) => setProviderMaximumResults(event.target.value)} /></label>
-              <button className="secondary-button accent" disabled={busy !== null || !capabilities?.providers.materials_project.available} onClick={() => void fetchMaterialsProject()} type="button">{busy === 'materials-project' ? <LoaderCircle className="spin" size={15} /> : <Database size={15} />}{tr('搜索 Materials Project', 'Search Materials Project')}</button>
-              {!capabilities?.providers.materials_project.client_installed && <small>{tr('需要安装 mp-api 才能连接 Materials Project。', 'Install mp-api to connect to Materials Project.')}</small>}
+              <details className="experimental-provider-panel">
+                <summary><strong>Materials Project</strong><span>{capabilities?.providers.materials_project.available ? tr('已连接', 'Connected') : tr('需要 API 密钥', 'API key needed')}</span></summary>
+                <div>
+                  <p>{tr('搜索已知晶体结构。API 密钥只保存在本机系统密钥库。', 'Search known crystal structures. The API key is stored only in the system credential manager.')}</p>
+                  <CredentialEditor
+                    busy={busy === 'credential-materials_project'}
+                    onDelete={deleteCredential}
+                    onSave={saveCredential}
+                    provider="materials_project"
+                    savedToSystem={capabilities?.providers.materials_project.saved_to_system ?? false}
+                    source={capabilities?.providers.materials_project.credential_source ?? null}
+                    storeAvailable={capabilities?.credential_store.available ?? false}
+                  />
+                  <label>{tr('最多返回', 'Maximum results')}<input min="1" max="1000" type="number" value={providerMaximumResults} onChange={(event) => setProviderMaximumResults(event.target.value)} /></label>
+                  <button className="secondary-button accent" disabled={busy !== null || !providerElements.trim() || !capabilities?.providers.materials_project.available} onClick={() => void fetchMaterialsProject()} type="button">{busy === 'materials-project' ? <LoaderCircle className="spin" size={15} /> : <Database size={15} />}{tr('搜索 Materials Project', 'Search Materials Project')}</button>
+                  {!capabilities?.providers.materials_project.client_installed && <small>{tr('需要安装 mp-api 才能连接 Materials Project。', 'Install mp-api to connect to Materials Project.')}</small>}
+                </div>
+              </details>
             </section>
           </div>
           <div className="experimental-catalog-list">
@@ -930,16 +1192,18 @@ export function ExperimentalModelingWorkbench({
 
         <article className="experimental-card">
           <div className="card-heading"><div><span className="eyebrow">{tr('第 4 步', 'Step 4')}</span><h3>{tr('生成候选结构', 'Generate candidates')}</h3></div><Play size={18} /></div>
-          <h4 className="experimental-subheading">{tr('AI 辅助（可选）', 'AI assistance (optional)')}</h4>
-          <CredentialEditor
-            busy={busy === 'credential-openai'}
-            onDelete={deleteCredential}
-            onSave={saveCredential}
-            provider="openai"
-            savedToSystem={capabilities?.gpt_planner.saved_to_system ?? false}
-            source={capabilities?.gpt_planner.credential_source ?? null}
-            storeAvailable={capabilities?.credential_store.available ?? false}
-          />
+          <details className="experimental-advanced experimental-ai-settings">
+            <summary>{tr('AI 辅助与 API 密钥（可选）', 'AI assistance and API key (optional)')}</summary>
+            <CredentialEditor
+              busy={busy === 'credential-openai'}
+              onDelete={deleteCredential}
+              onSave={saveCredential}
+              provider="openai"
+              savedToSystem={capabilities?.gpt_planner.saved_to_system ?? false}
+              source={capabilities?.gpt_planner.credential_source ?? null}
+              storeAvailable={capabilities?.credential_store.available ?? false}
+            />
+          </details>
           <div className="experimental-form-grid">
             <label>{tr('生成方式', 'Generation method')}<select value={plannerKind} onChange={(event) => setPlannerKind(event.target.value as 'rule' | 'gpt')}><option value="rule">{tr('本地规则（推荐）', 'Local rules (recommended)')}</option><option disabled={!capabilities?.gpt_planner.available} value="gpt">{tr('AI 辅助规划', 'AI-assisted planning')}</option></select></label>
             <label>{tr('最多保留', 'Maximum candidates')}<input min="1" max="50" type="number" value={maximumRepresentatives} onChange={(event) => setMaximumRepresentatives(event.target.value)} /></label>
@@ -1010,6 +1274,8 @@ export function ExperimentalModelingWorkbench({
               {activeRun.candidates.map((candidate) => {
                 const representative = representativeIds.has(candidate.candidate_id)
                 const selected = selectedCandidateIds.includes(candidate.candidate_id)
+                const applicableChecks = (candidate.assessment.evidence_checks ?? []).filter((item) => item.status !== 'not_applicable')
+                const passedChecks = applicableChecks.filter((item) => item.status === 'within_range').length
                 return (
                   <article className={`${focusedCandidateId === candidate.candidate_id ? 'focused' : ''} ${!candidate.assessment.valid ? 'invalid' : ''}`} key={candidate.candidate_id}>
                     <label>
@@ -1019,7 +1285,7 @@ export function ExperimentalModelingWorkbench({
                     <button onClick={() => setFocusedCandidateId(candidate.candidate_id)} type="button">
                       <strong>{candidate.assessment.formula}</strong>
                       <span>{localizedRecord(MODEL_KIND_LABELS, candidate.assessment.model_kind, tr)} · {candidate.assessment.num_sites} {tr('个原子', 'atoms')}</span>
-                      <small>{tr('表征匹配度', 'Evidence match')} {formatScore(candidate.assessment.evidence_score)} · {tr('来源', 'source')} {candidate.assessment.parent_reference_key}</small>
+                      <small>{tr('约束符合', 'Checks passed')} {passedChecks}/{applicableChecks.length || '—'} · {tr('来源', 'source')} {candidate.assessment.parent_reference_key}</small>
                     </button>
                   </article>
                 )
@@ -1027,46 +1293,26 @@ export function ExperimentalModelingWorkbench({
             </div>
             <article className="experimental-candidate-viewer">
               <div className="card-heading"><div><span className="eyebrow">{tr('结构预览', 'Structure preview')}</span><h3>{focusedCandidate?.assessment.formula ?? tr('选择候选结构', 'Select a candidate')}</h3></div><Atom size={18} /></div>
-              <StructureViewer
-                focusedAtomIndex1Based={focusedAtomIndex1Based}
-                onAtomClick={focusedCandidate ? setFocusedAtomIndex1Based : undefined}
-                showAtomIndices={showAtomIndices}
-                structure={focusedCandidate?.viewer ?? null}
-              />
-              {focusedCandidate && (
-                <div className="experimental-structure-inspector">
-                  <div className="experimental-viewer-toolbar">
-                    <span>{tr('只读查看；点击原子显示详情', 'Read-only; click an atom for details')}</span>
-                    <button
-                      className={showAtomIndices ? 'active' : ''}
-                      onClick={() => setShowAtomIndices((current) => !current)}
-                      type="button"
-                    >
-                      {showAtomIndices ? tr('隐藏编号', 'Hide indices') : tr('显示编号', 'Show indices')}
-                    </button>
-                  </div>
-                  <div className="experimental-element-counts" aria-label={tr('元素计数', 'Element counts')}>
-                    {focusedElementCounts.map(([element, count]) => (
-                      <span key={element}><strong>{element}</strong>{count}</span>
-                    ))}
-                  </div>
-                  <dl className="experimental-structure-summary">
-                    <div><dt>{tr('原子数', 'Atoms')}</dt><dd>{focusedCandidate.viewer.species.length}</dd></div>
-                    <div><dt>{tr('周期性', 'Periodicity')}</dt><dd>{focusedCandidate.viewer.periodic.map((item) => item ? 'P' : '—').join(' ')}</dd></div>
-                    {focusedLattice && <div><dt>{tr('晶胞长度', 'Cell lengths')}</dt><dd>a {focusedLattice.a.toFixed(3)} · b {focusedLattice.b.toFixed(3)} · c {focusedLattice.c.toFixed(3)} Å</dd></div>}
-                  </dl>
-                  {focusedAtom?.element && focusedAtom.fractional && focusedAtom.cartesian ? (
-                    <div className="experimental-atom-detail" aria-live="polite">
-                      <strong>#{focusedAtom.index} · {focusedAtom.element}</strong>
-                      <span>{tr('分数坐标', 'Fractional')} [{focusedAtom.fractional.map((value) => value.toFixed(4)).join(', ')}]</span>
-                      <span>{tr('笛卡尔坐标', 'Cartesian')} [{focusedAtom.cartesian.map((value) => value.toFixed(4)).join(', ')}] Å</span>
-                    </div>
-                  ) : (
-                    <div className="experimental-atom-detail muted">{tr('点击结构中的任一原子查看元素、序号和坐标。', 'Click any atom to inspect its element, index, and coordinates.')}</div>
-                  )}
-                </div>
-              )}
+              <StructureViewer structure={focusedCandidate?.viewer ?? null} />
               {focusedCandidate && <details className="experimental-provenance"><summary>{tr('来源与追溯信息', 'Source and provenance')}</summary><span>{tr('参考结构', 'Reference structure')}</span><code>{focusedCandidate.assessment.parent_reference_key}</code><span>{tr('结构校验码', 'Structure checksum')}</span><code>{shortHash(focusedCandidate.assessment.structure_sha256)}</code></details>}
+              {focusedCandidate && (
+                <section className="experimental-evidence-checks">
+                  <div className="card-heading"><div><span className="eyebrow">{tr('逐项对照', 'Evidence checks')}</span><h4>{tr('计算模型与实验范围', 'Model versus experiment')}</h4></div></div>
+                  {(focusedCandidate.assessment.evidence_checks ?? []).map((check) => (
+                    <article className={`check-${check.status}`} key={check.check_id}>
+                      <span className="evidence-check-status">{localizedRecord(CHECK_STATUS_LABELS, check.status, tr)}</span>
+                      <div>
+                        <strong>{localizedCheckLabel(check, tr)}</strong>
+                        <small>{localizedCheckMessage(check, tr)}</small>
+                      </div>
+                      <dl>
+                        <div><dt>{tr('模型', 'Model')}</dt><dd>{check.predicted_value == null ? '—' : `${check.unit === 'fraction' || check.unit === 'site fraction' ? (check.predicted_value * 100).toFixed(1) : check.predicted_value.toFixed(3)}${check.unit === 'fraction' || check.unit === 'site fraction' ? '%' : ` ${check.unit}`}`}</dd></div>
+                        <div><dt>{tr('实验范围', 'Experimental range')}</dt><dd>{check.experimental_minimum == null || check.experimental_maximum == null ? '—' : `${check.unit === 'fraction' || check.unit === 'site fraction' ? (check.experimental_minimum * 100).toFixed(1) : check.experimental_minimum.toFixed(3)}–${check.unit === 'fraction' || check.unit === 'site fraction' ? (check.experimental_maximum * 100).toFixed(1) : check.experimental_maximum.toFixed(3)}${check.unit === 'fraction' || check.unit === 'site fraction' ? '%' : ` ${check.unit}`}`}</dd></div>
+                      </dl>
+                    </article>
+                  ))}
+                </section>
+              )}
             </article>
           </div>
 

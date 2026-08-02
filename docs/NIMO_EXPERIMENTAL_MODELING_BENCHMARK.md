@@ -23,15 +23,14 @@ following routine measurements, including partial bundles:
 | Evidence | Required structured fields | What it can constrain | What it cannot establish alone |
 | --- | --- | --- | --- |
 | XRD/GIXRD | two-theta/intensity file, wavelength, scan range, substrate, geometry | crystalline phase families, lattice changes, approximate domain size, multiphase alternatives | a unique surface termination, amorphous local order, or catalytic active site |
-| ICP-OES/MS | element, value, at.% or wt.%, uncertainty/replicates, sample stage | bulk elemental composition | surface enrichment or oxidation state |
-| XPS | element/core level, assigned component, binding energy, fraction/range, fitting note, sample stage | surface composition and oxidation/hydroxylation hypotheses | atomic coordinates or an unambiguous bulk phase |
+| ICP-OES/MS | element, value, at.% or wt.%, uncertainty/replicates | bulk elemental composition | surface enrichment or oxidation state |
+| XPS | element/core level, assigned component, binding energy, fraction/range, fitting note | surface composition and oxidation/hydroxylation hypotheses | atomic coordinates or an unambiguous bulk phase |
 | TEM/HRTEM/SAED/EDS | d-spacing and tolerance, indexed plane if known, domain size, morphology/interface flags, local composition | local phases, lattice spacings, interfaces, crystallinity and size ranges | a statistically unique whole-electrode model from one field of view |
 
-The sample stage (`as prepared`, `activated`, `working-state approximation`,
-`post-reaction`, or `uncertain`) is optional metadata, not another experiment.
-It prevents evidence from physically different states from being merged
-silently. This is important for Ni–Mo because activation and operation may
-remove Mo or change the oxygen coverage.
+If measurements came from different treatments or specimens, that information
+belongs in the per-measurement conclusion or instrument/condition note. A
+generic lifecycle selector is not used as a substitute for those concrete
+conditions.
 
 ## Candidate families for the benchmark
 
@@ -116,25 +115,26 @@ of passed, failed, and unavailable observables.
 
 ## Software implementation plan
 
-### P0 — current v0.32.2 baseline
+### P0 — current v0.33.0 baseline
 
 - local and database-backed parent structures;
 - bounded substitutions, vacancies, strain, supercells, and slabs;
 - transparent XRD simulation/ranking and multiphase combinations;
-- state-aware evidence records, scoped composition intervals, provenance,
-  human confirmation, and explicit project write;
+- independently optional evidence records, scoped composition intervals,
+  provenance, human confirmation, and explicit project write;
 - read-only 3D candidate inspection with atom identity and coordinates.
 
-This baseline is a candidate-management and XRD-ranking system. ICP/EDS
-composition intervals affect candidate checks, but raw ICP, XPS, and TEM data
-are not yet parsed into complete forward-model scores.
+This baseline is a candidate-management and XRD-ranking system. Common
+ICP/EDS composition tables, fitted XPS component tables, and TEM/SAED spacing
+tables or short conclusions are now parsed into reviewable constraints. These
+are bounded compatibility checks, not full spectral forward models.
 
 ### P1 — structured routine-characterization input
 
 - add table editors and CSV templates for ICP, XPS components, and TEM/SAED
   spacings;
 - parse common two-column XRD exports and store units, instrument settings,
-  substrate, uncertainty, and sample stage;
+  substrate, uncertainty, and measurement conditions;
 - keep raw files immutable and derive reviewable normalized records;
 - allow bulk, surface, and local composition ranges for the same element;
 - show missing metadata as a warning with a usable fallback, not a hard block

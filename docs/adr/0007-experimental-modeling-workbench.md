@@ -8,10 +8,10 @@
 
 ## Context
 
-ADR 0006 defines the scientific core for converting state-aware experimental
+ADR 0006 defines the scientific core for converting experimental
 evidence and traceable parent structures into a finite representative model
 set. A CLI alone makes the workflow too cumbersome for routine use and hides
-important decisions such as state compatibility, provider provenance,
+important decisions such as measurement compatibility, provider provenance,
 competing phase hypotheses, and the boundary between inference and writing.
 
 The application must work across material systems. It cannot encode Ni-Mo as
@@ -50,7 +50,7 @@ template connects the review gate to the existing VASP path.
 
 - Ordinary local use and new material systems do not depend on GPT.
 - Provider APIs improve discovery but do not decide which model is true.
-- State mismatch, ambiguity, assumptions, and suggested next experiments remain
+- Measurement conflicts, ambiguity, assumptions, and suggested next experiments remain
   visible in the primary interface.
 - Database structure access is reproducible at the local snapshot level.
 - The original environment-only credential decision is superseded by ADR 0008.

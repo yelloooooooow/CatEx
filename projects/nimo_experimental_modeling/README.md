@@ -5,14 +5,13 @@ identification of an electrodeposited Ni-Mo catalyst.
 
 The example demonstrates:
 
-- separate as-prepared and activated sample states;
 - bulk Ni/Mo composition intervals;
 - a local structure catalog containing ideal Ni, Mo, and hypothetical B2-NiMo;
-- an as-prepared synthetic diffraction trace;
-- activated-state XPS metadata that triggers an unresolved oxygenated-surface
+- a synthetic diffraction trace;
+- XPS metadata that triggers an unresolved oxygenated-surface
   hypothesis rather than fabricated O coordinates;
 - rule-based generation of bulk references and low-index slabs;
-- explicit warnings when the target state and XRD state differ.
+- explicit unresolved-hypothesis reporting without fabricating coordinates.
 
 Run from the repository root:
 

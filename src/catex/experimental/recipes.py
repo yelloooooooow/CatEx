@@ -13,6 +13,7 @@ from catex.experimental.models import (
     CandidateOperation,
     CandidateOperationKind,
     CandidateRecipe,
+    CompositionBasis,
     CompositionScope,
     ExperimentSpec,
     ModelKind,
@@ -285,6 +286,215 @@ def _set_vacuum(branch: _Branch, operation: CandidateOperation, *, identity: str
     )
 
 
+def _top_region_indices(structure: Structure, *, depth_angstrom: float) -> tuple[int, ...]:
+    matrix = np.asarray(structure.lattice.matrix, dtype=float)
+    c_hat = matrix[2] / np.linalg.norm(matrix[2])
+    projected = np.asarray(structure.cart_coords, dtype=float) @ c_hat
+    top = float(np.max(projected))
+    return tuple(
+        index for index, value in enumerate(projected) if top - float(value) <= depth_angstrom
+    )
+
+
+def _rounded_counts(fractions: dict[str, float], total: int) -> dict[str, int]:
+    raw = {element: fraction * total for element, fraction in fractions.items()}
+    counts = {element: math.floor(value) for element, value in raw.items()}
+    remaining = total - sum(counts.values())
+    for element in sorted(raw, key=lambda item: (-(raw[item] - counts[item]), item))[:remaining]:
+        counts[element] += 1
+    return counts
+
+
+def _match_composition(
+    branch: _Branch,
+    operation: CandidateOperation,
+    *,
+    identity: str,
+) -> _Branch:
+    raw = operation.parameters.get("target_fractions")
+    if not isinstance(raw, dict) or not raw:
+        raise ValueError("match_composition target_fractions must be a non-empty object")
+    from pymatgen.core import Element
+
+    fractions: dict[str, float] = {}
+    for key, value in raw.items():
+        try:
+            symbol = Element(str(key)).symbol
+        except ValueError as exc:
+            raise ValueError("match_composition target element is invalid") from exc
+        fractions[symbol] = _finite_float(
+            value,
+            field_name=f"target fraction for {symbol}",
+            minimum=0.0,
+            maximum=1.0,
+        )
+    total_fraction = sum(fractions.values())
+    if not math.isclose(total_fraction, 1.0, abs_tol=1e-6):
+        raise ValueError("match_composition target fractions must sum to one")
+    scope = str(operation.parameters.get("scope", "bulk"))
+    if scope not in {"bulk", "surface"}:
+        raise ValueError("match_composition scope must be bulk or surface")
+    basis = CompositionBasis(str(operation.parameters.get("basis", "total_atomic_fraction")))
+    if basis is CompositionBasis.WEIGHT_FRACTION:
+        raise ValueError("match_composition does not convert weight fractions into site counts")
+    depth = _finite_float(
+        operation.parameters.get("surface_depth_angstrom", 3.0),
+        field_name="surface_depth_angstrom",
+        minimum=0.5,
+        maximum=20.0,
+    )
+    if scope == "surface":
+        if branch.model_kind is not ModelKind.SURFACE:
+            raise ValueError("surface composition matching requires a slab candidate")
+        region = _top_region_indices(branch.structure, depth_angstrom=depth)
+    else:
+        region = tuple(range(len(branch.structure)))
+    if basis is CompositionBasis.METAL_NORMALIZED_ATOMIC_FRACTION:
+        region = tuple(
+            index for index in region if Element(str(branch.structure[index].specie)).is_metal
+        )
+    eligible = tuple(index for index in region if str(branch.structure[index].specie) in fractions)
+    # Include existing sites as replaceable hosts even when one requested element is absent.
+    if len(eligible) < len(region):
+        eligible = tuple(
+            index
+            for index in region
+            if basis is CompositionBasis.TOTAL_ATOMIC_FRACTION
+            or Element(str(branch.structure[index].specie)).is_metal
+        )
+    if not eligible:
+        raise ValueError("match_composition found no eligible sites")
+    desired = _rounded_counts(fractions, len(eligible))
+    remaining_by_species = dict(desired)
+    replacements: dict[int, str] = {}
+    surplus: list[int] = []
+    for index in sorted(
+        eligible,
+        key=lambda item: (*np.asarray(branch.structure[item].frac_coords, dtype=float), item),
+    ):
+        current = str(branch.structure[index].specie)
+        if remaining_by_species.get(current, 0) > 0:
+            remaining_by_species[current] -= 1
+        else:
+            surplus.append(index)
+    deficits = [
+        element
+        for element in sorted(remaining_by_species)
+        for _ in range(remaining_by_species[element])
+    ]
+    if len(surplus) != len(deficits):
+        raise ValueError("match_composition could not balance target site counts")
+    replacements.update(zip(surplus, deficits, strict=True))
+    if replacements:
+        product = substitute_sites(
+            branch.structure,
+            replacements,
+            transformation_id=identity,
+        )
+        child = product.structure
+        digest = product.record.identity_sha256
+    else:
+        child = branch.structure.copy()
+        digest = _operation_digest(
+            kind=operation.kind,
+            parameters={
+                "target_fractions": fractions,
+                "scope": scope,
+                "basis": basis.value,
+                "surface_depth_angstrom": depth,
+            },
+            input_sha256=structure_hash(branch.structure),
+            output_sha256=structure_hash(child),
+        )
+    return _Branch(
+        child,
+        branch.model_kind,
+        (*branch.transformation_sha256s, digest),
+        branch.label,
+    )
+
+
+def _add_surface_coordination(
+    branch: _Branch,
+    operation: CandidateOperation,
+) -> _Branch:
+    if branch.model_kind is not ModelKind.SURFACE:
+        raise ValueError("surface coordination requires a slab candidate")
+    from pymatgen.core import Element
+
+    try:
+        center = Element(str(operation.parameters.get("element"))).symbol
+        neighbor = Element(str(operation.parameters.get("neighbor_element"))).symbol
+    except ValueError as exc:
+        raise ValueError("surface coordination elements are invalid") from exc
+    fraction = _finite_float(
+        operation.parameters.get("target_site_fraction"),
+        field_name="target_site_fraction",
+        minimum=0.0,
+        maximum=1.0,
+    )
+    cutoff = _finite_float(
+        operation.parameters.get("cutoff_angstrom", 2.6),
+        field_name="cutoff_angstrom",
+        minimum=0.5,
+        maximum=6.0,
+    )
+    height = _finite_float(
+        operation.parameters.get("height_angstrom", min(2.0, cutoff * 0.75)),
+        field_name="height_angstrom",
+        minimum=0.6,
+        maximum=4.0,
+    )
+    depth = _finite_float(
+        operation.parameters.get("surface_depth_angstrom", 3.0),
+        field_name="surface_depth_angstrom",
+        minimum=0.5,
+        maximum=20.0,
+    )
+    top_region = _top_region_indices(branch.structure, depth_angstrom=depth)
+    centers = [index for index in top_region if str(branch.structure[index].specie) == center]
+    if not centers:
+        raise ValueError(f"surface coordination found no top-surface {center} sites")
+    already_coordinated = {
+        index
+        for index in centers
+        if any(
+            str(site.specie) == neighbor
+            for site in branch.structure.get_neighbors(branch.structure[index], cutoff)
+        )
+    }
+    target_count = min(len(centers), math.ceil(fraction * len(centers)))
+    to_add = max(0, target_count - len(already_coordinated))
+    available = [index for index in centers if index not in already_coordinated]
+    selected = available[:to_add]
+    child = branch.structure.copy()
+    c_vector = np.asarray(child.lattice.matrix[2], dtype=float)
+    c_hat = c_vector / np.linalg.norm(c_vector)
+    for index in selected:
+        coordinate = np.asarray(branch.structure[index].coords, dtype=float) + c_hat * height
+        child.append(neighbor, coordinate, coords_are_cartesian=True, validate_proximity=True)
+    digest = _operation_digest(
+        kind=operation.kind,
+        parameters={
+            "element": center,
+            "neighbor_element": neighbor,
+            "target_site_fraction": fraction,
+            "cutoff_angstrom": cutoff,
+            "height_angstrom": height,
+            "surface_depth_angstrom": depth,
+            "added_count": len(selected),
+        },
+        input_sha256=structure_hash(branch.structure),
+        output_sha256=structure_hash(child),
+    )
+    return _Branch(
+        child,
+        ModelKind.SURFACE,
+        (*branch.transformation_sha256s, digest),
+        branch.label,
+    )
+
+
 def _composition_diagnostics(
     structure: Structure,
     spec: ExperimentSpec,
@@ -303,13 +513,13 @@ def _composition_diagnostics(
                 {"elements": sorted(excluded)},
             )
         )
-    if spec.allowed_elements and not elements <= set(spec.allowed_elements):
+    if spec.model_elements and not elements <= set(spec.model_elements):
         diagnostics.append(
             Diagnostic(
                 "CANDIDATE_OUTSIDE_ALLOWED_CHEMISTRY",
                 Severity.ERROR,
                 "The candidate contains elements outside the declared chemical system.",
-                {"elements": sorted(elements - set(spec.allowed_elements))},
+                {"elements": sorted(elements - set(spec.model_elements))},
             )
         )
     required = set(spec.required_bulk_elements)
@@ -387,6 +597,10 @@ def execute_candidate_recipe(
                 next_branches.extend(_slabs(branch, operation, identity_prefix=identity))
             elif operation.kind is CandidateOperationKind.SET_VACUUM:
                 next_branches.append(_set_vacuum(branch, operation, identity=identity))
+            elif operation.kind is CandidateOperationKind.MATCH_COMPOSITION:
+                next_branches.append(_match_composition(branch, operation, identity=identity))
+            elif operation.kind is CandidateOperationKind.ADD_SURFACE_COORDINATION:
+                next_branches.append(_add_surface_coordination(branch, operation))
             else:  # pragma: no cover - exhaustive enum guard
                 raise ValueError(f"unsupported candidate operation: {operation.kind.value}")
         branches = tuple(next_branches)

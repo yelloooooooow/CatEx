@@ -20,10 +20,10 @@ from catex.experimental import (
     EvidenceRole,
     ExperimentSpec,
     InMemoryStructureProvider,
+    LocalEnvironmentConstraint,
     ModelKind,
     OptimadeCatalogFetchReport,
     ProviderRegistry,
-    SampleState,
     StructureSourceKind,
     execute_candidate_recipe,
     fetch_optimade_structures,
@@ -46,12 +46,10 @@ def _spec() -> ExperimentSpec:
     composition = EvidenceRecord(
         evidence_id="icp-1",
         kind=EvidenceKind.ICP,
-        sample_state=SampleState.AS_PREPARED,
         role=EvidenceRole.HARD,
     )
     return ExperimentSpec(
         sample_id="synthetic-nimo",
-        target_state=SampleState.AS_PREPARED,
         evidence=(composition,),
         composition_constraints=(
             ElementConstraint(
@@ -73,7 +71,7 @@ def _spec() -> ExperimentSpec:
     )
 
 
-def test_experiment_spec_is_strict_and_tracks_state(tmp_path) -> None:
+def test_experiment_spec_is_strict_and_ignores_legacy_state_fields(tmp_path) -> None:
     xrd = tmp_path / "sample.xy"
     xrd.write_text("\n".join(f"{20 + i} {i + 1}" for i in range(8)), encoding="utf-8")
     payload = {
@@ -112,12 +110,13 @@ def test_experiment_spec_is_strict_and_tracks_state(tmp_path) -> None:
 
     parsed = parse_experiment_spec(payload, artifact_root=tmp_path)
 
-    assert parsed.spec.target_state is SampleState.ACTIVATED
     assert parsed.spec.required_bulk_elements == ("Ni",)
+    assert set(parsed.spec.model_elements) >= {"Ni"}
     assert parsed.spec.evidence[1].artifact is not None
     assert parsed.spec.evidence[1].artifact.name == "sample.xy"
     assert parsed.artifact_paths["xrd"] == xrd.resolve()
     assert "path" not in json.dumps(parsed.spec.to_dict()).lower()
+    assert "state" not in json.dumps(parsed.spec.to_dict()).lower()
 
     with pytest.raises(ValueError, match="unknown fields"):
         parse_experiment_spec({**payload, "typo": True}, artifact_root=tmp_path)
@@ -293,6 +292,99 @@ def test_candidate_recipe_generates_explicit_surface_branch_and_vacuum() -> None
     )
 
 
+def test_candidate_recipes_match_alloy_composition_and_surface_coordination() -> None:
+    nickel = Structure.from_spacegroup(
+        "Fm-3m",
+        Lattice.cubic(3.52),
+        ["Ni"],
+        [[0, 0, 0]],
+    )
+    registry = ProviderRegistry(
+        (
+            InMemoryStructureProvider(
+                "evidence-parent",
+                (("ni", nickel, StructureSourceKind.HYPOTHETICAL),),
+            ),
+        )
+    )
+    composition_recipe = CandidateRecipe(
+        recipe_id="measured-alloy",
+        parent_reference_key="evidence-parent:ni",
+        hypothesis_id="alloy-proxy",
+        operations=(
+            CandidateOperation(CandidateOperationKind.SUPERCELL, {"scale": [2, 1, 1]}),
+            CandidateOperation(
+                CandidateOperationKind.MATCH_COMPOSITION,
+                {
+                    "target_fractions": {"Ni": 0.75, "Mo": 0.25},
+                    "scope": "bulk",
+                    "basis": "total_atomic_fraction",
+                },
+            ),
+        ),
+        evidence_ids=("icp-1",),
+        rationale="Match a bounded ICP midpoint.",
+    )
+
+    bulk = execute_candidate_recipe(composition_recipe, registry, _spec())[0]
+
+    assert bulk.structure.composition.get_atomic_fraction("Mo") == pytest.approx(0.25)
+
+    xps = EvidenceRecord(
+        evidence_id="xps-1",
+        kind=EvidenceKind.XPS,
+        role=EvidenceRole.SOFT,
+    )
+    surface_spec = ExperimentSpec(
+        sample_id="surface-coordination",
+        evidence=(xps,),
+        local_environment_constraints=(
+            LocalEnvironmentConstraint(
+                "Ni",
+                "O",
+                0.4,
+                0.6,
+                evidence_ids=("xps-1",),
+            ),
+        ),
+        allowed_elements=("Ni",),
+        material_pack="surface-catalyst",
+    )
+    surface_recipe = CandidateRecipe(
+        recipe_id="xps-surface",
+        parent_reference_key="evidence-parent:ni",
+        hypothesis_id="oxygenated-surface",
+        operations=(
+            CandidateOperation(
+                CandidateOperationKind.SLAB,
+                {
+                    "miller_index": [1, 0, 0],
+                    "minimum_slab_angstrom": 5.0,
+                    "minimum_vacuum_angstrom": 10.0,
+                    "maximum_candidates": 1,
+                    "termination_indices": [0],
+                },
+            ),
+            CandidateOperation(
+                CandidateOperationKind.ADD_SURFACE_COORDINATION,
+                {
+                    "element": "Ni",
+                    "neighbor_element": "O",
+                    "target_site_fraction": 0.5,
+                    "cutoff_angstrom": 2.6,
+                },
+            ),
+        ),
+        evidence_ids=("xps-1",),
+        rationale="Create one geometry proxy for a fitted XPS component.",
+    )
+
+    surface = execute_candidate_recipe(surface_recipe, registry, surface_spec)[0]
+
+    assert surface.model_kind is ModelKind.SURFACE
+    assert surface.structure.composition["O"] > 0
+
+
 @pytest.mark.parametrize(
     "kind,parameters,match",
     [
@@ -341,7 +433,6 @@ def test_candidate_chemistry_diagnostics_are_fail_closed() -> None:
     )
     spec = ExperimentSpec(
         sample_id="restricted",
-        target_state=SampleState.UNSPECIFIED,
         evidence=(),
         allowed_elements=("Ni", "Mo"),
         excluded_elements=("O",),

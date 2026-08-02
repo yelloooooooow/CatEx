@@ -1,7 +1,6 @@
 {
   "schema_version": "catex.experiment-spec.v1",
   "sample_id": "synthetic-electrodeposited-nimo",
-  "target_state": "activated",
   "material_pack": "alloy-electrocatalyst",
   "allowed_elements": [
     "Ni",
@@ -16,7 +15,7 @@
       "maximum_atomic_fraction": 0.8,
       "scope": "bulk",
       "evidence_ids": [
-        "icp-as-prepared"
+        "icp-composition"
       ]
     },
     {
@@ -25,7 +24,7 @@
       "maximum_atomic_fraction": 0.4,
       "scope": "bulk",
       "evidence_ids": [
-        "icp-as-prepared"
+        "icp-composition"
       ]
     }
   ],
@@ -33,7 +32,6 @@
     {
       "evidence_id": "synthesis",
       "kind": "synthesis",
-      "sample_state": "as_prepared",
       "role": "context",
       "metadata": {
         "method": "electrodeposition",
@@ -43,9 +41,8 @@
       "note": "Synthetic software fixture; not a laboratory record."
     },
     {
-      "evidence_id": "icp-as-prepared",
+      "evidence_id": "icp-composition",
       "kind": "icp",
-      "sample_state": "as_prepared",
       "role": "hard",
       "metadata": {
         "basis": "atomic_fraction",
@@ -53,9 +50,8 @@
       }
     },
     {
-      "evidence_id": "xrd-as-prepared",
+      "evidence_id": "xrd-pattern",
       "kind": "xrd",
-      "sample_state": "as_prepared",
       "role": "hard",
       "artifact": "synthetic_xrd.xy",
       "metadata": {
@@ -66,9 +62,8 @@
       }
     },
     {
-      "evidence_id": "xps-activated",
+      "evidence_id": "xps-surface",
       "kind": "xps",
-      "sample_state": "activated",
       "role": "soft",
       "metadata": {
         "elements": [

@@ -17,7 +17,6 @@ from catex.experimental import (
     ProviderRegistry,
     RuleCandidatePlanner,
     RulePlannerSettings,
-    SampleState,
     StructureSourceKind,
 )
 
@@ -38,12 +37,10 @@ def _registry() -> ProviderRegistry:
 def _spec() -> ExperimentSpec:
     return ExperimentSpec(
         sample_id="nimo",
-        target_state=SampleState.ACTIVATED,
         evidence=(
             EvidenceRecord(
                 evidence_id="xps",
                 kind=EvidenceKind.XPS,
-                sample_state=SampleState.ACTIVATED,
                 role=EvidenceRole.SOFT,
                 metadata={"elements": ["Ni", "Mo", "O"], "assignment": "oxide"},
             ),
@@ -154,12 +151,10 @@ def test_rule_planner_reports_disorder_limits_large_parents_and_no_match() -> No
     )
     disorder_spec = ExperimentSpec(
         sample_id="disordered",
-        target_state=SampleState.ACTIVATED,
         evidence=(
             EvidenceRecord(
                 evidence_id="tem",
                 kind=EvidenceKind.TEM,
-                sample_state=SampleState.ACTIVATED,
                 role=EvidenceRole.SOFT,
                 metadata={"observation": "broad_halo"},
             ),
@@ -180,7 +175,6 @@ def test_rule_planner_reports_disorder_limits_large_parents_and_no_match() -> No
 
     no_match_spec = ExperimentSpec(
         sample_id="no-match",
-        target_state=SampleState.UNSPECIFIED,
         evidence=(),
         allowed_elements=("Fe",),
     )

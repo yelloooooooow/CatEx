@@ -1,5 +1,5 @@
-import { fireEvent, render, screen, waitFor } from '@testing-library/react'
-import { beforeEach, describe, expect, it, vi } from 'vitest'
+import { cleanup, fireEvent, render, screen, waitFor } from '@testing-library/react'
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 
 import { I18nProvider } from '../i18n'
 import type { ExperimentalModelingCapabilities } from '../types'
@@ -14,15 +14,23 @@ const mocks = vi.hoisted(() => ({
 
 vi.mock('./StructureViewer', () => ({
   StructureViewer: ({
-    onAtomClick,
-    showAtomIndices,
+    structure,
   }: {
-    onAtomClick?: (index: number) => void
-    showAtomIndices?: boolean
+    structure?: {
+      species: string[]
+      fractional_coordinates: number[][]
+      lattice: number[][]
+    } | null
   }) => (
-    <button data-indices={showAtomIndices ? 'on' : 'off'} onClick={() => onAtomClick?.(2)} type="button">
-      Mock structure viewer
-    </button>
+    <div>
+      <button type="button">Mock structure viewer</button>
+      {structure && <>
+        <strong>#2 · {structure.species[1]}</strong>
+        <span>Fractional [{structure.fractional_coordinates[1].map((value) => value.toFixed(4)).join(', ')}]</span>
+        <span>a 3.000 · b 3.000 · c 4.000 Å</span>
+        <button type="button">Show indices</button>
+      </>}
+    </div>
   ),
 }))
 
@@ -77,6 +85,8 @@ vi.mock('../api', () => ({
 }))
 
 describe('experimental credential editor', () => {
+  afterEach(() => cleanup())
+
   beforeEach(() => {
     window.localStorage.clear()
     window.localStorage.setItem('catex.language.v1', 'en')
@@ -140,7 +150,7 @@ describe('experimental credential editor', () => {
     expect(JSON.stringify(window.localStorage)).not.toContain('browser-memory-test-key')
   })
 
-  it('labels sample states in plain language and allows an uncertain state', async () => {
+  it('starts chemistry-neutral and does not expose a sample-stage selector', async () => {
     render(
       <I18nProvider>
         <ExperimentalModelingWorkbench
@@ -153,12 +163,9 @@ describe('experimental credential editor', () => {
       </I18nProvider>,
     )
 
-    expect((await screen.findAllByRole('option', {
-      name: 'Activated (after electrochemical activation)',
-    })).length).toBeGreaterThanOrEqual(2)
-    expect(screen.getAllByRole('option', {
-      name: 'Not specified / uncertain',
-    }).length).toBeGreaterThanOrEqual(2)
+    expect((await screen.findAllByText('Characterization')).length).toBeGreaterThan(0)
+    expect(screen.getByLabelText('Main elements')).toHaveValue('')
+    expect(screen.queryByText('Sample stage')).not.toBeInTheDocument()
   })
 
   it('keeps bulk and surface composition ranges for the same element', async () => {
@@ -174,19 +181,22 @@ describe('experimental credential editor', () => {
       </I18nProvider>,
     )
 
-    await screen.findAllByLabelText('Measurement scope')
-    const scope = screen.getAllByLabelText('Measurement scope').at(-1)
-    const addRange = screen.getAllByRole('button', { name: 'Add range' }).at(-1)
+    await screen.findAllByLabelText('Spatial scope')
+    const scope = screen.getAllByLabelText('Spatial scope')[0]
+    const addRange = screen.getAllByRole('button', { name: 'Add composition' }).at(-1)
     expect(scope).toBeDefined()
     expect(addRange).toBeDefined()
+    fireEvent.change(screen.getByLabelText('Element'), { target: { value: 'Ni' } })
+    fireEvent.change(screen.getAllByLabelText('Minimum (%)')[0], { target: { value: '45' } })
+    fireEvent.change(screen.getAllByLabelText('Maximum (%)')[0], { target: { value: '75' } })
     fireEvent.click(addRange!)
     fireEvent.change(scope!, {
       target: { value: 'surface' },
     })
     fireEvent.click(addRange!)
 
-    expect(screen.getByText(/Ni · 45\.0–75\.0 at\.% · Bulk \(ICP\)/)).toBeInTheDocument()
-    expect(screen.getByText(/Ni · 45\.0–75\.0 at\.% · Surface \(XPS\)/)).toBeInTheDocument()
+    expect(screen.getByText(/Ni · 45\.0–75\.0% · Bulk \(ICP\)/)).toBeInTheDocument()
+    expect(screen.getByText(/Ni · 45\.0–75\.0% · Surface \(XPS\)/)).toBeInTheDocument()
   })
 
   it('shows read-only candidate structure and clicked atom details', async () => {
@@ -251,7 +261,6 @@ describe('experimental credential editor', () => {
     expect(screen.getByText('Fractional [0.5000, 0.5000, 0.5000]')).toBeInTheDocument()
     expect(screen.getByText('a 3.000 · b 3.000 · c 4.000 Å')).toBeInTheDocument()
 
-    fireEvent.click(screen.getByRole('button', { name: 'Show indices' }))
-    expect(screen.getByRole('button', { name: 'Mock structure viewer' })).toHaveAttribute('data-indices', 'on')
+    expect(screen.getByRole('button', { name: 'Show indices' })).toBeInTheDocument()
   })
 })

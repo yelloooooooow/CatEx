@@ -13,13 +13,18 @@ from catex.experimental import (
     CandidatePlan,
     CandidateRecipe,
     ClaimLevel,
+    CompositionScope,
+    ElementConstraint,
+    EvidenceKind,
+    EvidenceRecord,
+    EvidenceRole,
     ExperimentInput,
     ExperimentSpec,
     InferenceStatus,
     InMemoryStructureProvider,
+    LatticeSpacingConstraint,
     ProviderRegistry,
     RuleCandidatePlanner,
-    SampleState,
     StructuralHypothesis,
     StructureSourceKind,
     XRDSearchSettings,
@@ -200,7 +205,6 @@ def test_cli_inference_and_materialization(tmp_path, capsys) -> None:
 def test_inference_without_xrd_abstains_and_recommends_low_cost_evidence(tmp_path) -> None:
     spec = ExperimentSpec(
         sample_id="no-xrd",
-        target_state=SampleState.AS_PREPARED,
         evidence=(),
         allowed_elements=("Ni",),
     )
@@ -238,6 +242,87 @@ def test_inference_without_xrd_abstains_and_recommends_low_cost_evidence(tmp_pat
         )
 
 
+def test_inference_can_review_candidates_from_composition_without_xrd() -> None:
+    evidence = EvidenceRecord(
+        evidence_id="icp-1",
+        kind=EvidenceKind.ICP,
+        role=EvidenceRole.SOFT,
+    )
+    spec = ExperimentSpec(
+        sample_id="composition-only",
+        evidence=(evidence,),
+        composition_constraints=(
+            ElementConstraint(
+                "Ni",
+                0.95,
+                1.0,
+                CompositionScope.BULK,
+                ("icp-1",),
+            ),
+        ),
+        allowed_elements=("Ni",),
+    )
+    registry = ProviderRegistry(
+        (
+            InMemoryStructureProvider(
+                "synthetic",
+                (("ni", _nickel(), StructureSourceKind.HYPOTHETICAL),),
+            ),
+        )
+    )
+
+    run = infer_experimental_models(
+        ExperimentInput(spec, {}),
+        registry,
+        RuleCandidatePlanner(),
+        maximum_representatives=1,
+    )
+
+    assert run.report.status is InferenceStatus.READY_FOR_REVIEW
+    assert run.report.claim_ceiling is ClaimLevel.CANDIDATE_ONLY
+    assert run.report.phase_search is None
+    checks = run.report.candidate_assessments[0].evidence_checks
+    assert any(item.kind == "composition" and item.status == "within_range" for item in checks)
+
+
+def test_inference_can_review_candidates_from_tem_spacing_without_xrd() -> None:
+    evidence = EvidenceRecord(
+        evidence_id="tem-1",
+        kind=EvidenceKind.TEM,
+        role=EvidenceRole.SOFT,
+    )
+    spec = ExperimentSpec(
+        sample_id="tem-only",
+        evidence=(evidence,),
+        lattice_spacing_constraints=(
+            LatticeSpacingConstraint(2.032, 0.05, ("tem-1",)),
+        ),
+        allowed_elements=("Ni",),
+    )
+    registry = ProviderRegistry(
+        (
+            InMemoryStructureProvider(
+                "synthetic",
+                (("ni", _nickel(), StructureSourceKind.HYPOTHETICAL),),
+            ),
+        )
+    )
+
+    run = infer_experimental_models(
+        ExperimentInput(spec, {}),
+        registry,
+        RuleCandidatePlanner(),
+        maximum_representatives=1,
+    )
+
+    assert run.report.status is InferenceStatus.READY_FOR_REVIEW
+    assert run.report.claim_ceiling is ClaimLevel.CANDIDATE_ONLY
+    assert any(
+        item.kind == "tem" and item.status == "within_range"
+        for item in run.report.candidate_assessments[0].evidence_checks
+    )
+
+
 class _InvalidRecipePlanner:
     planner_id = "test-invalid"
 
@@ -246,7 +331,6 @@ class _InvalidRecipePlanner:
         hypothesis = StructuralHypothesis(
             hypothesis_id="invalid",
             summary="A recipe that must fail local bounds.",
-            target_state=spec.target_state,
             evidence_ids=(),
             parent_reference_keys=(reference.key,),
             generated_atomistic_candidate=True,
@@ -270,7 +354,6 @@ class _InvalidRecipePlanner:
 def test_inference_catches_invalid_recipe_and_refuses_empty_materialization(tmp_path) -> None:
     spec = ExperimentSpec(
         sample_id="invalid-recipe",
-        target_state=SampleState.UNSPECIFIED,
         evidence=(),
         allowed_elements=("Ni",),
     )

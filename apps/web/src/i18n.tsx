@@ -49,7 +49,7 @@ export function useI18n(): I18nContextValue {
 const nodeTranslations: Record<string, { title: string; description: string }> = {
   'experiment.evidence.prepare': {
     title: 'Prepare experimental constraints',
-    description: 'Register sample lifecycle, characterization evidence, and composition intervals in the Experimental Models workspace.',
+    description: 'Upload available characterization and review the ranges CatEx extracts in the Experimental Models workspace.',
   },
   'structure.catalog.prepare': {
     title: 'Prepare parent-structure catalog',

@@ -87,16 +87,6 @@ class EvidenceKind(StrEnum):
     OTHER = "other"
 
 
-class SampleState(StrEnum):
-    """State in the sample lifecycle to which one observation applies."""
-
-    AS_PREPARED = "as_prepared"
-    ACTIVATED = "activated"
-    OPERANDO_APPROXIMATION = "operando_approximation"
-    POST_MORTEM = "post_mortem"
-    UNSPECIFIED = "unspecified"
-
-
 class EvidenceRole(StrEnum):
     """How strongly a record constrains candidate construction."""
 
@@ -112,6 +102,14 @@ class CompositionScope(StrEnum):
     SURFACE = "surface"
     LOCAL = "local"
     UNSPECIFIED = "unspecified"
+
+
+class CompositionBasis(StrEnum):
+    """Denominator used by one reported composition interval."""
+
+    TOTAL_ATOMIC_FRACTION = "total_atomic_fraction"
+    METAL_NORMALIZED_ATOMIC_FRACTION = "metal_normalized_atomic_fraction"
+    WEIGHT_FRACTION = "weight_fraction"
 
 
 class StructureSourceKind(StrEnum):
@@ -135,6 +133,8 @@ class CandidateOperationKind(StrEnum):
     ISOTROPIC_STRAIN = "isotropic_strain"
     SLAB = "slab"
     SET_VACUUM = "set_vacuum"
+    MATCH_COMPOSITION = "match_composition"
+    ADD_SURFACE_COORDINATION = "add_surface_coordination"
 
 
 class ModelKind(StrEnum):
@@ -189,11 +189,10 @@ class EvidenceArtifact:
 
 @dataclass(frozen=True, slots=True)
 class EvidenceRecord:
-    """One observation bound to a sample state and explicit epistemic role."""
+    """One observation with an explicit epistemic role."""
 
     evidence_id: str
     kind: EvidenceKind
-    sample_state: SampleState
     role: EvidenceRole
     metadata: Mapping[str, Any] = field(default_factory=dict)
     artifact: EvidenceArtifact | None = None
@@ -222,7 +221,6 @@ class EvidenceRecord:
             "schema_version": self.schema_version,
             "evidence_id": self.evidence_id,
             "kind": self.kind.value,
-            "sample_state": self.sample_state.value,
             "role": self.role.value,
             "metadata": dict(self.metadata),
             "artifact": self.artifact.to_dict() if self.artifact else None,
@@ -239,6 +237,7 @@ class ElementConstraint:
     maximum_atomic_fraction: float
     scope: CompositionScope = CompositionScope.BULK
     evidence_ids: tuple[str, ...] = ()
+    basis: CompositionBasis = CompositionBasis.TOTAL_ATOMIC_FRACTION
 
     def __post_init__(self) -> None:
         from pymatgen.core import Element
@@ -268,18 +267,109 @@ class ElementConstraint:
             "minimum_atomic_fraction": self.minimum_atomic_fraction,
             "maximum_atomic_fraction": self.maximum_atomic_fraction,
             "scope": self.scope.value,
+            "basis": self.basis.value,
+            "evidence_ids": list(self.evidence_ids),
+        }
+
+
+@dataclass(frozen=True, slots=True)
+class LocalEnvironmentConstraint:
+    """Fraction of target sites coordinated to one neighboring element.
+
+    This is a deliberately modest XPS/EDS compatibility proxy.  It does not
+    claim to predict a core-level spectrum or oxidation state.
+    """
+
+    element: str
+    neighbor_element: str
+    minimum_site_fraction: float
+    maximum_site_fraction: float
+    cutoff_angstrom: float = 2.6
+    scope: CompositionScope = CompositionScope.SURFACE
+    evidence_ids: tuple[str, ...] = ()
+
+    def __post_init__(self) -> None:
+        from pymatgen.core import Element
+
+        try:
+            element = Element(self.element).symbol
+            neighbor = Element(self.neighbor_element).symbol
+        except (TypeError, ValueError) as exc:
+            raise ValueError("local environment elements must be valid symbols") from exc
+        lower = float(self.minimum_site_fraction)
+        upper = float(self.maximum_site_fraction)
+        cutoff = float(self.cutoff_angstrom)
+        if not all(math.isfinite(item) for item in (lower, upper, cutoff)):
+            raise ValueError("local environment values must be finite")
+        if not 0 <= lower <= upper <= 1:
+            raise ValueError("site-fraction bounds must satisfy 0 <= minimum <= maximum <= 1")
+        if not 0.5 <= cutoff <= 6.0:
+            raise ValueError("local environment cutoff must be between 0.5 and 6.0 angstrom")
+        if self.scope not in {CompositionScope.SURFACE, CompositionScope.LOCAL}:
+            raise ValueError("local environment scope must be surface or local")
+        object.__setattr__(self, "element", element)
+        object.__setattr__(self, "neighbor_element", neighbor)
+        object.__setattr__(self, "minimum_site_fraction", lower)
+        object.__setattr__(self, "maximum_site_fraction", upper)
+        object.__setattr__(self, "cutoff_angstrom", cutoff)
+        object.__setattr__(
+            self,
+            "evidence_ids",
+            _identifiers(self.evidence_ids, field_name="evidence_ids"),
+        )
+
+    def to_dict(self) -> dict[str, Any]:
+        return {
+            "element": self.element,
+            "neighbor_element": self.neighbor_element,
+            "minimum_site_fraction": self.minimum_site_fraction,
+            "maximum_site_fraction": self.maximum_site_fraction,
+            "cutoff_angstrom": self.cutoff_angstrom,
+            "scope": self.scope.value,
+            "evidence_ids": list(self.evidence_ids),
+        }
+
+
+@dataclass(frozen=True, slots=True)
+class LatticeSpacingConstraint:
+    """One local lattice-spacing observation from TEM or SAED."""
+
+    d_spacing_angstrom: float
+    tolerance_angstrom: float
+    evidence_ids: tuple[str, ...] = ()
+
+    def __post_init__(self) -> None:
+        spacing = float(self.d_spacing_angstrom)
+        tolerance = float(self.tolerance_angstrom)
+        if not math.isfinite(spacing) or spacing <= 0:
+            raise ValueError("d_spacing_angstrom must be finite and positive")
+        if not math.isfinite(tolerance) or not 0 < tolerance <= spacing:
+            raise ValueError("tolerance_angstrom must be positive and no larger than d-spacing")
+        object.__setattr__(self, "d_spacing_angstrom", spacing)
+        object.__setattr__(self, "tolerance_angstrom", tolerance)
+        object.__setattr__(
+            self,
+            "evidence_ids",
+            _identifiers(self.evidence_ids, field_name="evidence_ids"),
+        )
+
+    def to_dict(self) -> dict[str, Any]:
+        return {
+            "d_spacing_angstrom": self.d_spacing_angstrom,
+            "tolerance_angstrom": self.tolerance_angstrom,
             "evidence_ids": list(self.evidence_ids),
         }
 
 
 @dataclass(frozen=True, slots=True)
 class ExperimentSpec:
-    """Normalized evidence and constraints for one target sample state."""
+    """Normalized evidence and constraints for one representative model set."""
 
     sample_id: str
-    target_state: SampleState
     evidence: tuple[EvidenceRecord, ...]
     composition_constraints: tuple[ElementConstraint, ...] = ()
+    local_environment_constraints: tuple[LocalEnvironmentConstraint, ...] = ()
+    lattice_spacing_constraints: tuple[LatticeSpacingConstraint, ...] = ()
     allowed_elements: tuple[str, ...] = ()
     excluded_elements: tuple[str, ...] = ()
     material_pack: str = "generic"
@@ -296,10 +386,13 @@ class ExperimentSpec:
         excluded = tuple(sorted({Element(item).symbol for item in self.excluded_elements}))
         if set(allowed) & set(excluded):
             raise ValueError("allowed_elements and excluded_elements must not overlap")
-        constraint_elements = [item.element for item in self.composition_constraints]
-        if len(constraint_elements) != len(set(constraint_elements)):
+        constraint_keys = [
+            (item.element, item.scope, item.basis) for item in self.composition_constraints
+        ]
+        if len(constraint_keys) != len(set(constraint_keys)):
             raise ValueError(
-                "composition constraints must contain at most one interval per element"
+                "composition constraints must contain at most one interval per element, "
+                "scope, and basis"
             )
         known_evidence = set(evidence_ids)
         if any(
@@ -308,13 +401,26 @@ class ExperimentSpec:
             for evidence_id in constraint.evidence_ids
         ):
             raise ValueError("composition constraints reference unknown evidence IDs")
-        minimum_sum = sum(
-            item.minimum_atomic_fraction
-            for item in self.composition_constraints
-            if item.scope is CompositionScope.BULK
-        )
-        if minimum_sum > 1 + 1e-12:
-            raise ValueError("minimum bulk atomic fractions cannot sum to more than one")
+        if any(
+            evidence_id not in known_evidence
+            for constraint in self.local_environment_constraints
+            for evidence_id in constraint.evidence_ids
+        ):
+            raise ValueError("local environment constraints reference unknown evidence IDs")
+        if any(
+            evidence_id not in known_evidence
+            for constraint in self.lattice_spacing_constraints
+            for evidence_id in constraint.evidence_ids
+        ):
+            raise ValueError("lattice-spacing constraints reference unknown evidence IDs")
+        grouped_minimums: dict[tuple[CompositionScope, CompositionBasis], float] = {}
+        for item in self.composition_constraints:
+            key = (item.scope, item.basis)
+            grouped_minimums[key] = grouped_minimums.get(key, 0.0) + item.minimum_atomic_fraction
+        if any(value > 1 + 1e-12 for value in grouped_minimums.values()):
+            raise ValueError(
+                "minimum composition fractions cannot sum to more than one per scope and basis"
+            )
         object.__setattr__(self, "allowed_elements", allowed)
         object.__setattr__(self, "excluded_elements", excluded)
         object.__setattr__(
@@ -333,15 +439,35 @@ class ExperimentSpec:
             )
         )
 
+    @property
+    def model_elements(self) -> tuple[str, ...]:
+        """Elements allowed in parent and generated environment-aware candidates."""
+
+        return tuple(
+            sorted(
+                {
+                    *self.allowed_elements,
+                    *(item.element for item in self.composition_constraints),
+                    *(item.element for item in self.local_environment_constraints),
+                    *(item.neighbor_element for item in self.local_environment_constraints),
+                }
+            )
+        )
+
     def to_dict(self) -> dict[str, Any]:
         return {
             "schema_version": self.schema_version,
             "sample_id": self.sample_id,
-            "target_state": self.target_state.value,
             "material_pack": self.material_pack,
             "allowed_elements": list(self.allowed_elements),
             "excluded_elements": list(self.excluded_elements),
             "composition_constraints": [item.to_dict() for item in self.composition_constraints],
+            "local_environment_constraints": [
+                item.to_dict() for item in self.local_environment_constraints
+            ],
+            "lattice_spacing_constraints": [
+                item.to_dict() for item in self.lattice_spacing_constraints
+            ],
             "evidence": [item.to_dict() for item in self.evidence],
         }
 
@@ -511,7 +637,6 @@ class StructuralHypothesis:
 
     hypothesis_id: str
     summary: str
-    target_state: SampleState
     evidence_ids: tuple[str, ...]
     parent_reference_keys: tuple[str, ...] = ()
     assumptions: tuple[str, ...] = ()
@@ -555,7 +680,6 @@ class StructuralHypothesis:
             "schema_version": self.schema_version,
             "hypothesis_id": self.hypothesis_id,
             "summary": self.summary,
-            "target_state": self.target_state.value,
             "evidence_ids": list(self.evidence_ids),
             "parent_reference_keys": list(self.parent_reference_keys),
             "assumptions": list(self.assumptions),
@@ -579,6 +703,7 @@ class CandidateAssessment:
     evidence_score: float
     phase_support_score: float | None
     xrd_directly_applicable: bool
+    evidence_checks: tuple[EvidenceCheck, ...]
     transformation_sha256s: tuple[str, ...]
     diagnostics: tuple[Diagnostic, ...]
     schema_version: str = "catex.candidate-assessment.v1"
@@ -615,6 +740,72 @@ class CandidateAssessment:
             "evidence_score": self.evidence_score,
             "phase_support_score": self.phase_support_score,
             "xrd_directly_applicable": self.xrd_directly_applicable,
+            "evidence_checks": [item.to_dict() for item in self.evidence_checks],
             "transformation_sha256s": list(self.transformation_sha256s),
             "diagnostics": [item.to_dict() for item in self.diagnostics],
+        }
+
+
+@dataclass(frozen=True, slots=True)
+class EvidenceCheck:
+    """Transparent candidate-versus-observation comparison."""
+
+    check_id: str
+    kind: str
+    label: str
+    role: EvidenceRole
+    status: str
+    score: float | None
+    predicted_value: float | None = None
+    experimental_minimum: float | None = None
+    experimental_maximum: float | None = None
+    unit: str = ""
+    evidence_ids: tuple[str, ...] = ()
+    message: str = ""
+
+    def __post_init__(self) -> None:
+        object.__setattr__(self, "check_id", _identifier(self.check_id, field_name="check_id"))
+        if self.status not in {"within_range", "outside_range", "not_applicable"}:
+            raise ValueError("evidence check status is invalid")
+        if self.score is not None and (not math.isfinite(self.score) or not 0 <= self.score <= 1):
+            raise ValueError("evidence check score must be in [0, 1]")
+        for name in ("predicted_value", "experimental_minimum", "experimental_maximum"):
+            value = getattr(self, name)
+            if value is not None and not math.isfinite(value):
+                raise ValueError(f"{name} must be finite when present")
+        object.__setattr__(
+            self,
+            "label",
+            _one_line(self.label, field_name="label", maximum=255),
+        )
+        object.__setattr__(
+            self,
+            "unit",
+            _one_line(self.unit, field_name="unit", maximum=32, allow_empty=True),
+        )
+        object.__setattr__(
+            self,
+            "message",
+            _one_line(self.message, field_name="message", maximum=1000, allow_empty=True),
+        )
+        object.__setattr__(
+            self,
+            "evidence_ids",
+            _identifiers(self.evidence_ids, field_name="evidence_ids"),
+        )
+
+    def to_dict(self) -> dict[str, Any]:
+        return {
+            "check_id": self.check_id,
+            "kind": self.kind,
+            "label": self.label,
+            "role": self.role.value,
+            "status": self.status,
+            "score": self.score,
+            "predicted_value": self.predicted_value,
+            "experimental_minimum": self.experimental_minimum,
+            "experimental_maximum": self.experimental_maximum,
+            "unit": self.unit,
+            "evidence_ids": list(self.evidence_ids),
+            "message": self.message,
         }

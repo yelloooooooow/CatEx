@@ -68,16 +68,16 @@ export const WORKFLOW_NODE_GROUPS: WorkflowNodeGroup[] = [
 
 const guidance: Record<string, WorkflowNodeGuidance> = {
   'experiment.evidence.prepare': {
-    purposeZh: '把样品状态、XRD/GIXRD、成分区间和其他表征整理成带不确定度的证据集。',
-    purposeEn: 'Register sample state, XRD/GIXRD, composition intervals, and other characterization as an uncertainty-aware evidence set.',
+    purposeZh: '导入现有的 XRD、ICP、EDS、XPS、TEM 等表征，并检查自动提取的范围。',
+    purposeEn: 'Import available XRD, ICP, EDS, XPS, TEM, and other measurements, then review the extracted ranges.',
     useWhenZh: '实验制备的材料需要先转换为可计算的结构假设时使用。双击进入“实验建模”页面。',
     useWhenEn: 'Use when an experimentally prepared material must be translated into calculable structure hypotheses. Double-click to open Experimental Models.',
-    requirementsZh: ['已打开项目', '明确目标样品状态', '至少有实验摘要；原始文件可逐步补充'],
-    requirementsEn: ['An open project', 'An explicit target sample state', 'At least an evidence summary; raw files may be added progressively'],
-    outputsZh: ['版本化实验约束集', '状态不一致与缺失信息提示'],
-    outputsEn: ['Versioned experimental constraint set', 'State-mismatch and missing-evidence warnings'],
-    cautionZh: '不要把不同生命周期状态的证据静默合并。',
-    cautionEn: 'Do not silently merge evidence from different sample lifecycle states.',
+    requirementsZh: ['已打开项目', '至少一项数据文件或简短实验结论；其他表征可逐步补充'],
+    requirementsEn: ['An open project', 'At least one data file or short conclusion; other measurements may be added progressively'],
+    outputsZh: ['版本化实验约束集', '自动提取范围与缺失信息提示'],
+    outputsEn: ['Versioned experimental constraint set', 'Extracted ranges and missing-evidence warnings'],
+    cautionZh: '不同样品或处理条件的数据应在结论或测试条件中明确说明。',
+    cautionEn: 'Identify data from materially different specimens or treatments in the conclusion or conditions.',
   },
   'structure.catalog.prepare': {
     purposeZh: '组合项目结构、论文结构、OPTIMADE 和可选 Materials Project 快照。',

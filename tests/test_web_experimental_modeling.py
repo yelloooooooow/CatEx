@@ -39,12 +39,21 @@ def test_web_experimental_modeling_review_and_materialization(tmp_path: Path) ->
             files={"file": ("composition.csv", b"element,at_fraction\nNi,0.6\nMo,0.4\n")},
         )
         evidence_id = evidence.json()["evidence_artifact_id"]
+        extracted = client.post(
+            f"/api/v1/projects/{project_id}/experimental-modeling/evidence-extraction",
+            json={
+                "evidence_id": "composition",
+                "evidence_artifact_id": evidence_id,
+                "kind": "icp",
+                "conclusion": "Ni-rich Ni-Mo deposit",
+                "instrument_info": "ICP-OES",
+            },
+        )
         saved = client.put(
             f"/api/v1/projects/{project_id}/experimental-modeling/spec",
             json={
                 "schema_version": "catex.experiment-spec.v1",
                 "sample_id": "electrode-1",
-                "target_state": "activated",
                 "material_pack": "alloy-electrocatalyst",
                 "allowed_elements": ["Ni", "Mo"],
                 "excluded_elements": [],
@@ -68,7 +77,6 @@ def test_web_experimental_modeling_review_and_materialization(tmp_path: Path) ->
                     {
                         "evidence_id": "composition",
                         "kind": "icp",
-                        "sample_state": "activated",
                         "role": "hard",
                         "metadata": {"basis": "atomic_fraction"},
                         "evidence_artifact_id": evidence_id,
@@ -138,9 +146,11 @@ def test_web_experimental_modeling_review_and_materialization(tmp_path: Path) ->
     assert "api_key_value" not in str(capabilities.json()).lower()
     assert structure.status_code == 201
     assert evidence.status_code == 201
+    assert extracted.status_code == 200
+    assert extracted.json()["review_required"] is True
     assert saved.status_code == 200
     assert inferred.status_code == 201
-    assert run["report"]["status"] == "insufficient_evidence"
+    assert run["report"]["status"] == "ready_for_review"
     assert run["report"]["claim_ceiling"] == "candidate_only"
     assert reviewed.status_code == 201
     assert reviewed.json()["unique_structure_claimed"] is False
@@ -172,7 +182,6 @@ def test_web_experimental_modeling_rejects_unreviewed_materialization(
             f"/api/v1/projects/{project_id}/experimental-modeling/spec",
             json={
                 "sample_id": "gate-test",
-                "target_state": "unspecified",
                 "allowed_elements": ["Ni", "Mo"],
             },
         )

@@ -14,6 +14,8 @@ from catex.experimental.models import (
     CandidateOperation,
     CandidateOperationKind,
     CandidateRecipe,
+    CompositionBasis,
+    CompositionScope,
     EvidenceKind,
     ExperimentSpec,
     StructuralHypothesis,
@@ -123,6 +125,60 @@ def _metadata_mentions_disorder(spec: ExperimentSpec) -> bool:
     return False
 
 
+def _target_composition(
+    spec: ExperimentSpec,
+    structure: Any,
+    *,
+    scope: CompositionScope,
+) -> tuple[CompositionBasis, dict[str, float]] | None:
+    """Build one normalized midpoint composition without inventing a new phase."""
+
+    groups: dict[CompositionBasis, list[Any]] = {}
+    for constraint in spec.composition_constraints:
+        if constraint.scope is scope and constraint.basis is not CompositionBasis.WEIGHT_FRACTION:
+            groups.setdefault(constraint.basis, []).append(constraint)
+    if not groups:
+        return None
+    basis, constraints = sorted(
+        groups.items(),
+        key=lambda item: (-len(item[1]), item[0].value),
+    )[0]
+    target = {
+        item.element: (item.minimum_atomic_fraction + item.maximum_atomic_fraction) / 2
+        for item in constraints
+    }
+    constrained_sum = sum(target.values())
+    if constrained_sum <= 0:
+        return None
+    if constrained_sum >= 1 - 1e-9:
+        return basis, {element: value / constrained_sum for element, value in target.items()}
+    from pymatgen.core import Element
+
+    existing = {
+        element.symbol: float(structure.composition[element])
+        for element in structure.composition.elements
+        if basis is CompositionBasis.TOTAL_ATOMIC_FRACTION or Element(element.symbol).is_metal
+    }
+    unconstrained = {key: value for key, value in existing.items() if key not in target}
+    if not unconstrained:
+        return basis, {element: value / constrained_sum for element, value in target.items()}
+    remaining = 1.0 - constrained_sum
+    denominator = sum(unconstrained.values())
+    target.update(
+        {element: remaining * value / denominator for element, value in unconstrained.items()}
+    )
+    normalizer = sum(target.values())
+    return basis, {element: value / normalizer for element, value in target.items()}
+
+
+def _bulk_supercell_scale(num_sites: int) -> list[int]:
+    if num_sites <= 12:
+        return [2, 2, 2]
+    if num_sites <= 48:
+        return [2, 1, 1]
+    return [1, 1, 1]
+
+
 class RuleCandidatePlanner:
     """Deterministic database-first baseline with no external API calls."""
 
@@ -147,7 +203,7 @@ class RuleCandidatePlanner:
                 )[: self.settings.maximum_parent_phases]
             )
         references = registry.search(
-            allowed_elements=spec.allowed_elements,
+            allowed_elements=spec.model_elements,
             excluded_elements=spec.excluded_elements,
         )
         return tuple(item.key for item in references[: self.settings.maximum_parent_phases])
@@ -163,7 +219,12 @@ class RuleCandidatePlanner:
         hypotheses: list[StructuralHypothesis] = []
         recipes: list[CandidateRecipe] = []
         diagnostics: list[Diagnostic] = []
-        electrocatalyst = "electrocatalyst" in spec.material_pack.lower()
+        surface_modeling = (
+            "catalyst" in spec.material_pack.lower()
+            or bool(spec.local_environment_constraints)
+            or any(item.scope is CompositionScope.SURFACE for item in spec.composition_constraints)
+        )
+        alloy_modeling = "alloy" in spec.material_pack.lower()
         for index, parent_key in enumerate(parent_keys):
             reference = registry.get_reference(parent_key)
             hypothesis_id = f"phase-family-{index + 1}"
@@ -174,7 +235,6 @@ class RuleCandidatePlanner:
                         f"{reference.formula} is a parent crystalline phase family "
                         "compatible with the current catalog and evidence."
                     ),
-                    target_state=spec.target_state,
                     evidence_ids=evidence_ids,
                     parent_reference_keys=(parent_key,),
                     assumptions=(
@@ -196,8 +256,52 @@ class RuleCandidatePlanner:
                         assumptions=("The database unit cell is an idealized bulk reference.",),
                     )
                 )
-            if electrocatalyst:
-                structure = registry.get_structure(parent_key)
+            structure = registry.get_structure(parent_key)
+            bulk_target = (
+                _target_composition(spec, structure, scope=CompositionScope.BULK)
+                if alloy_modeling
+                else None
+            )
+            surface_target = (
+                _target_composition(spec, structure, scope=CompositionScope.SURFACE)
+                if alloy_modeling
+                else None
+            )
+            if bulk_target is not None and self.settings.include_bulk_models:
+                basis, target = bulk_target
+                operations: list[CandidateOperation] = []
+                scale = _bulk_supercell_scale(len(structure))
+                if scale != [1, 1, 1]:
+                    operations.append(
+                        CandidateOperation(CandidateOperationKind.SUPERCELL, {"scale": scale})
+                    )
+                operations.append(
+                    CandidateOperation(
+                        CandidateOperationKind.MATCH_COMPOSITION,
+                        {
+                            "target_fractions": target,
+                            "scope": "bulk",
+                            "basis": basis.value,
+                        },
+                    )
+                )
+                recipes.append(
+                    CandidateRecipe(
+                        recipe_id=f"bulk-composition-{index + 1}",
+                        parent_reference_key=parent_key,
+                        hypothesis_id=hypothesis_id,
+                        operations=tuple(operations),
+                        evidence_ids=evidence_ids,
+                        rationale=(
+                            "Adjust an alloy supercell toward the measured composition midpoint."
+                        ),
+                        assumptions=(
+                            "This deterministic ordering is a representative alloy proxy, "
+                            "not an SQS.",
+                        ),
+                    )
+                )
+            if surface_modeling:
                 if len(structure) > 100:
                     diagnostics.append(
                         Diagnostic(
@@ -209,28 +313,21 @@ class RuleCandidatePlanner:
                     )
                     continue
                 for miller in self.settings.surface_miller_indices:
+                    slab_operation = CandidateOperation(
+                        CandidateOperationKind.SLAB,
+                        {
+                            "miller_index": list(miller),
+                            "minimum_slab_angstrom": self.settings.minimum_slab_angstrom,
+                            "minimum_vacuum_angstrom": self.settings.minimum_vacuum_angstrom,
+                            "maximum_candidates": self.settings.maximum_terminations_per_surface,
+                        },
+                    )
                     recipes.append(
                         CandidateRecipe(
                             recipe_id=(f"surface-{index + 1}-{miller[0]}{miller[1]}{miller[2]}"),
                             parent_reference_key=parent_key,
                             hypothesis_id=hypothesis_id,
-                            operations=(
-                                CandidateOperation(
-                                    CandidateOperationKind.SLAB,
-                                    {
-                                        "miller_index": list(miller),
-                                        "minimum_slab_angstrom": (
-                                            self.settings.minimum_slab_angstrom
-                                        ),
-                                        "minimum_vacuum_angstrom": (
-                                            self.settings.minimum_vacuum_angstrom
-                                        ),
-                                        "maximum_candidates": (
-                                            self.settings.maximum_terminations_per_surface
-                                        ),
-                                    },
-                                ),
-                            ),
+                            operations=(slab_operation,),
                             evidence_ids=evidence_ids,
                             rationale=(
                                 "Generate low-index surface terminations for downstream "
@@ -242,6 +339,69 @@ class RuleCandidatePlanner:
                             ),
                         )
                     )
+                    informed_operations: list[CandidateOperation] = [slab_operation]
+                    if bulk_target is not None:
+                        basis, target = bulk_target
+                        informed_operations.append(
+                            CandidateOperation(
+                                CandidateOperationKind.MATCH_COMPOSITION,
+                                {
+                                    "target_fractions": target,
+                                    "scope": "bulk",
+                                    "basis": basis.value,
+                                },
+                            )
+                        )
+                    if surface_target is not None:
+                        basis, target = surface_target
+                        informed_operations.append(
+                            CandidateOperation(
+                                CandidateOperationKind.MATCH_COMPOSITION,
+                                {
+                                    "target_fractions": target,
+                                    "scope": "surface",
+                                    "basis": basis.value,
+                                },
+                            )
+                        )
+                    for constraint in spec.local_environment_constraints[:1]:
+                        informed_operations.append(
+                            CandidateOperation(
+                                CandidateOperationKind.ADD_SURFACE_COORDINATION,
+                                {
+                                    "element": constraint.element,
+                                    "neighbor_element": constraint.neighbor_element,
+                                    "target_site_fraction": (
+                                        constraint.minimum_site_fraction
+                                        + constraint.maximum_site_fraction
+                                    )
+                                    / 2,
+                                    "cutoff_angstrom": constraint.cutoff_angstrom,
+                                },
+                            )
+                        )
+                    if len(informed_operations) > 1:
+                        recipes.append(
+                            CandidateRecipe(
+                                recipe_id=(
+                                    f"surface-informed-{index + 1}-"
+                                    f"{miller[0]}{miller[1]}{miller[2]}"
+                                ),
+                                parent_reference_key=parent_key,
+                                hypothesis_id=hypothesis_id,
+                                operations=tuple(informed_operations),
+                                evidence_ids=evidence_ids,
+                                rationale=(
+                                    "Generate a surface variant adjusted toward measured "
+                                    "composition "
+                                    "and local-environment constraints."
+                                ),
+                                assumptions=(
+                                    "Added coordination motifs require geometry relaxation "
+                                    "before DFT interpretation.",
+                                ),
+                            )
+                        )
 
         if _metadata_mentions_surface_oxygen(spec):
             hypotheses.append(
@@ -251,7 +411,6 @@ class RuleCandidatePlanner:
                         "Surface oxygenated or hydroxylated motifs are plausible, but ordinary "
                         "XPS does not define unique atomic coordinates."
                     ),
-                    target_state=spec.target_state,
                     evidence_ids=tuple(
                         item.evidence_id for item in spec.evidence if item.kind is EvidenceKind.XPS
                     ),
@@ -270,7 +429,6 @@ class RuleCandidatePlanner:
                         "A disordered or poorly crystalline motif ensemble is plausible; "
                         "the crystalline catalog does not uniquely represent it."
                     ),
-                    target_state=spec.target_state,
                     evidence_ids=tuple(
                         item.evidence_id
                         for item in spec.evidence
@@ -597,7 +755,6 @@ class GPTCandidatePlanner:
                 StructuralHypothesis(
                     hypothesis_id=str(raw["hypothesis_id"]),
                     summary=str(raw["summary"]),
-                    target_state=spec.target_state,
                     evidence_ids=linked_evidence,
                     parent_reference_keys=parent_keys,
                     assumptions=tuple(str(item) for item in raw["assumptions"]),

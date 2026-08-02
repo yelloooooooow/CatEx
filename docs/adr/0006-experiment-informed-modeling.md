@@ -18,7 +18,8 @@ boundary between experimental evidence and its existing DFT workflow.
 Add `catex.experimental` as a scientific-core module with the following
 separation:
 
-1. Evidence records are state-aware, immutable, and path-free.
+1. Evidence records are immutable and path-free; measurement conditions remain
+   attached to each record without a mandatory lifecycle label.
 2. Parent structures come from pluggable providers with explicit provenance.
 3. Planners emit a bounded recipe DSL, never executable source code.
 4. Deterministic local code executes and validates every recipe.

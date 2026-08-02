@@ -1,0 +1,22 @@
+{
+  "schema_version": "catex.structure-catalog.v1",
+  "provider": "nimo-her-literature",
+  "entries": [
+    {
+      "record_id": "nist-jarvis-jvasp-16581-ni4mo",
+      "path": "structures/nist_jarvis_ni4mo.cif",
+      "source_kind": "database",
+      "source_locator": "https://www.ctcms.nist.gov/~knc6/jsmol/JVASP-16581.html",
+      "license": "NIST public data; see source disclaimer",
+      "citation": "K. Choudhary et al., npj Comput. Mater. 6, 173 (2020); JARVIS-ID JVASP-16581."
+    },
+    {
+      "record_id": "fcc-ni-negative-control",
+      "path": "structures/fcc_ni_negative_control.cif",
+      "source_kind": "hypothetical",
+      "source_locator": "catex-software-negative-control:fcc-ni-a-3.52",
+      "license": "CC0",
+      "citation": "Software negative control; not a phase assignment for the paper sample."
+    }
+  ]
+}

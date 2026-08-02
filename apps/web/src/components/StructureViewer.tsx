@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState } from 'react'
+import { useEffect, useMemo, useRef, useState } from 'react'
 import type { WEAS as WeasViewer } from 'weas'
 
 import { useI18n } from '../i18n'
@@ -10,6 +10,7 @@ interface StructureViewerProps {
   mobileAtomIndices1Based?: number[]
   focusedAtomIndex1Based?: number | null
   showAtomIndices?: boolean
+  showInspector?: boolean
   onAtomClick?: (index1Based: number) => void
 }
 
@@ -83,6 +84,7 @@ export function StructureViewer({
   mobileAtomIndices1Based = EMPTY_ATOM_INDICES,
   focusedAtomIndex1Based = null,
   showAtomIndices = false,
+  showInspector = true,
   onAtomClick,
 }: StructureViewerProps) {
   const { tr } = useI18n()
@@ -90,10 +92,38 @@ export function StructureViewer({
   const viewerRef = useRef<WeasViewer | null>(null)
   const onAtomClickRef = useRef(onAtomClick)
   const [viewerError, setViewerError] = useState<string | null>(null)
+  const [inspectedAtomIndex1Based, setInspectedAtomIndex1Based] = useState<number | null>(null)
+  const [internalShowAtomIndices, setInternalShowAtomIndices] = useState(false)
+  const effectiveFocusedAtom = focusedAtomIndex1Based ?? inspectedAtomIndex1Based
+  const effectiveShowAtomIndices = showAtomIndices || internalShowAtomIndices
+  const elementCounts = useMemo(() => {
+    const counts = new Map<string, number>()
+    for (const element of structure?.species ?? []) {
+      counts.set(element, (counts.get(element) ?? 0) + 1)
+    }
+    return [...counts]
+  }, [structure])
+  const latticeLengths = useMemo(
+    () => structure?.lattice.map((vector) => Math.hypot(...vector)) ?? [],
+    [structure],
+  )
+  const inspectedAtom = structure && effectiveFocusedAtom
+    ? {
+        index: effectiveFocusedAtom,
+        element: structure.species[effectiveFocusedAtom - 1],
+        fractional: structure.fractional_coordinates[effectiveFocusedAtom - 1],
+        cartesian: structure.cartesian_coordinates[effectiveFocusedAtom - 1],
+      }
+    : null
 
   useEffect(() => {
     onAtomClickRef.current = onAtomClick
   }, [onAtomClick])
+
+  useEffect(() => {
+    setInspectedAtomIndex1Based(null)
+    setInternalShowAtomIndices(false)
+  }, [structure])
 
   useEffect(() => {
     if (!structure || !containerRef.current) return
@@ -146,8 +176,8 @@ export function StructureViewer({
           structure,
           fixedAtomIndices1Based,
           mobileAtomIndices1Based,
-          focusedAtomIndex1Based,
-          showAtomIndices,
+          effectiveFocusedAtom,
+          effectiveShowAtomIndices,
         )
       })
       .catch((error: unknown) => {
@@ -160,13 +190,13 @@ export function StructureViewer({
         }
       })
     const handleViewerClick = () => {
-      if (!onAtomClickRef.current) return
       const timer = window.setTimeout(() => {
         pendingClickTimers.delete(timer)
         const selected = viewer?.avr.selectedAtomsIndices ?? []
         const selectedIndex = selected.at(-1)
         if (selectedIndex === undefined) return
         viewer!.avr.selectedAtomsIndices = []
+        setInspectedAtomIndex1Based(selectedIndex + 1)
         onAtomClickRef.current?.(selectedIndex + 1)
       }, 0)
       pendingClickTimers.add(timer)
@@ -192,10 +222,10 @@ export function StructureViewer({
       structure,
       fixedAtomIndices1Based,
       mobileAtomIndices1Based,
-      focusedAtomIndex1Based,
-      showAtomIndices,
+      effectiveFocusedAtom,
+      effectiveShowAtomIndices,
     )
-  }, [fixedAtomIndices1Based, focusedAtomIndex1Based, mobileAtomIndices1Based, showAtomIndices, structure])
+  }, [effectiveFocusedAtom, effectiveShowAtomIndices, fixedAtomIndices1Based, mobileAtomIndices1Based, structure])
 
   if (!structure) {
     return (
@@ -209,16 +239,49 @@ export function StructureViewer({
 
   return (
     <div className="viewer-shell">
-      <div
-        aria-label={tr('三维周期结构查看器', '3D periodic structure viewer')}
-        className={`structure-viewer ${onAtomClick ? 'interactive' : ''}`}
-        ref={containerRef}
-      />
-      <div className="viewer-overlay">
-        <span>WEAS · {tr('球棍模型', 'ball-and-stick')}</span>
-        <span>{structure.species.length} atoms</span>
+      <div className="viewer-stage">
+        <div
+          aria-label={tr('三维周期结构查看器', '3D periodic structure viewer')}
+          className="structure-viewer interactive"
+          ref={containerRef}
+        />
+        <div className="viewer-overlay">
+          <span>WEAS · {tr('球棍模型', 'ball-and-stick')}</span>
+          <span>{structure.species.length} {tr('个原子', 'atoms')}</span>
+        </div>
+        {viewerError && <div className="viewer-error">{viewerError}</div>}
       </div>
-      {viewerError && <div className="viewer-error">{viewerError}</div>}
+      {showInspector && (
+        <div className="viewer-inspector">
+          <div className="viewer-inspector-toolbar">
+            <span>{tr('只读查看 · 点击原子显示元素和坐标', 'Read only · click an atom for element and coordinates')}</span>
+            <button
+              className={effectiveShowAtomIndices ? 'active' : ''}
+              onClick={() => setInternalShowAtomIndices((current) => !current)}
+              type="button"
+            >
+              {effectiveShowAtomIndices ? tr('隐藏原子编号', 'Hide atom indices') : tr('显示原子编号', 'Show atom indices')}
+            </button>
+          </div>
+          <div className="viewer-element-counts">
+            {elementCounts.map(([element, count]) => <span key={element}><strong>{element}</strong>{count}</span>)}
+          </div>
+          <dl className="viewer-structure-summary">
+            <div><dt>{tr('原子数', 'Atoms')}</dt><dd>{structure.species.length}</dd></div>
+            <div><dt>{tr('周期性', 'Periodicity')}</dt><dd>{structure.periodic.map((item) => item ? 'P' : '—').join(' ')}</dd></div>
+            <div><dt>{tr('晶胞长度', 'Cell lengths')}</dt><dd>{latticeLengths.map((value, index) => `${'abc'[index]} ${value.toFixed(3)}`).join(' · ')} Å</dd></div>
+          </dl>
+          {inspectedAtom?.element && inspectedAtom.fractional && inspectedAtom.cartesian ? (
+            <div className="viewer-atom-detail" aria-live="polite">
+              <strong>#{inspectedAtom.index} · {inspectedAtom.element}</strong>
+              <span>{tr('分数坐标', 'Fractional')} [{inspectedAtom.fractional.map((value) => value.toFixed(4)).join(', ')}]</span>
+              <span>{tr('笛卡尔坐标', 'Cartesian')} [{inspectedAtom.cartesian.map((value) => value.toFixed(4)).join(', ')}] Å</span>
+            </div>
+          ) : (
+            <div className="viewer-atom-detail muted">{tr('点击任一原子查看详细信息。', 'Click any atom to inspect it.')}</div>
+          )}
+        </div>
+      )}
     </div>
   )
 }

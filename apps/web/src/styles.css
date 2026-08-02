@@ -326,6 +326,10 @@ button:focus-visible {
   margin-bottom: 13px;
 }
 
+.experimental-scope-card .experimental-form-grid {
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+}
+
 .experimental-warning {
   display: flex;
   align-items: flex-start;
@@ -374,7 +378,7 @@ button:focus-visible {
 
 .experimental-evidence-list > div {
   display: grid;
-  grid-template-columns: 62px 58px 130px minmax(120px, 1fr) auto 28px;
+  grid-template-columns: 72px 58px minmax(130px, 1fr) auto 28px;
   align-items: center;
   gap: 8px;
   padding: 8px 9px;
@@ -391,6 +395,12 @@ button:focus-visible {
 .experimental-evidence-list code {
   color: var(--muted);
   font-size: 9px;
+}
+
+.evidence-source {
+  color: var(--muted);
+  font-size: 10px;
+  white-space: nowrap;
 }
 
 .experimental-evidence-list button,
@@ -490,12 +500,32 @@ button:focus-visible {
 }
 
 .experimental-provider-grid section {
-  display: grid;
-  gap: 9px;
   padding: 12px;
   border: 1px solid var(--line);
   border-radius: 11px;
   background: rgba(0, 0, 0, 0.12);
+}
+
+.experimental-provider-panel > summary {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+  color: var(--text);
+  font-size: 12px;
+  cursor: pointer;
+}
+
+.experimental-provider-panel > summary span {
+  color: var(--muted);
+  font-size: 10px;
+  font-weight: 400;
+}
+
+.experimental-provider-panel > div {
+  display: grid;
+  gap: 9px;
+  padding-top: 12px;
 }
 
 .experimental-provider-grid h4,
@@ -868,10 +898,98 @@ button:focus-visible {
   flex-direction: column;
 }
 
-.experimental-candidate-viewer .structure-viewer {
+.experimental-candidate-viewer .viewer-stage {
   min-height: 340px;
-  flex: 1;
 }
+
+.experimental-constraint-editor {
+  margin-top: 12px;
+  padding: 0 12px 12px;
+  border: 1px solid var(--line);
+  border-radius: 10px;
+  background: rgba(0, 0, 0, 0.1);
+}
+
+.experimental-constraint-editor > summary {
+  padding: 12px 0;
+  color: var(--text);
+  font-size: 12px;
+  font-weight: 600;
+  cursor: pointer;
+}
+
+.experimental-save-constraints {
+  margin-top: 14px;
+}
+
+.experimental-ai-settings .experimental-credential-editor {
+  margin-top: 10px;
+}
+
+.experimental-subheading {
+  margin: 14px 0 8px;
+  color: var(--text-bright);
+  font-size: 12px;
+}
+
+.experimental-constraint-composer.compact {
+  grid-template-columns: repeat(2, minmax(0, 1fr)) auto;
+}
+
+.experimental-evidence-checks {
+  display: grid;
+  gap: 7px;
+  margin-top: 14px;
+}
+
+.experimental-evidence-checks > article {
+  display: grid;
+  grid-template-columns: 76px minmax(0, 1fr) minmax(210px, 0.7fr);
+  align-items: center;
+  gap: 10px;
+  padding: 9px 10px;
+  border: 1px solid var(--line);
+  border-radius: 9px;
+  background: rgba(255, 255, 255, 0.015);
+}
+
+.experimental-evidence-checks article.check-within_range { border-color: rgba(98, 213, 173, 0.28); }
+.experimental-evidence-checks article.check-outside_range { border-color: rgba(225, 118, 112, 0.38); }
+
+.evidence-check-status {
+  color: var(--muted);
+  font-size: 10px;
+}
+
+.experimental-evidence-checks article.check-within_range .evidence-check-status { color: var(--mint); }
+.experimental-evidence-checks article.check-outside_range .evidence-check-status { color: var(--red); }
+
+.experimental-evidence-checks article > div {
+  display: grid;
+  gap: 3px;
+}
+
+.experimental-evidence-checks small {
+  color: var(--muted);
+  font-size: 10px;
+  line-height: 1.45;
+}
+
+.experimental-evidence-checks dl {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 6px;
+  margin: 0;
+}
+
+.experimental-evidence-checks dl > div {
+  padding: 6px 7px;
+  border-radius: 7px;
+  background: rgba(255, 255, 255, 0.025);
+}
+
+.experimental-evidence-checks dt { color: var(--muted); font-size: 9px; }
+.experimental-evidence-checks dd { margin: 2px 0 0; font: 500 10px 'DM Mono', monospace; }
 
 .experimental-field-help {
   display: block;
@@ -3023,7 +3141,6 @@ button:disabled {
 .viewer-empty {
   position: relative;
   width: 100%;
-  height: 100%;
   min-height: 180px;
   overflow: hidden;
   background:
@@ -3031,10 +3148,26 @@ button:disabled {
     #081713;
 }
 
+.viewer-shell {
+  display: flex;
+  height: auto;
+  flex-direction: column;
+}
+
+.viewer-empty { height: 100%; }
+
+.viewer-stage {
+  position: relative;
+  width: 100%;
+  height: 320px;
+  min-height: 180px;
+  overflow: hidden;
+}
+
 .structure-viewer {
   width: 100%;
   height: 100%;
-  min-height: inherit;
+  min-height: 180px;
 }
 
 .structure-viewer canvas {
@@ -3042,6 +3175,97 @@ button:disabled {
 }
 
 .structure-viewer.interactive canvas { cursor: crosshair; }
+
+.viewer-inspector {
+  display: grid;
+  gap: 8px;
+  padding: 11px;
+  border-top: 1px solid var(--line);
+  background: #0a1814;
+}
+
+.viewer-inspector-toolbar {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+  color: var(--muted);
+  font-size: 11px;
+}
+
+.viewer-inspector-toolbar button {
+  padding: 5px 8px;
+  color: var(--muted);
+  font: inherit;
+  border: 1px solid var(--line);
+  border-radius: 7px;
+  background: rgba(255, 255, 255, 0.02);
+  cursor: pointer;
+}
+
+.viewer-inspector-toolbar button.active {
+  color: var(--mint);
+  border-color: var(--mint-soft);
+  background: rgba(98, 213, 173, 0.08);
+}
+
+.viewer-element-counts {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+}
+
+.viewer-element-counts span {
+  display: inline-flex;
+  align-items: baseline;
+  gap: 5px;
+  padding: 4px 7px;
+  color: var(--muted);
+  font-size: 10px;
+  border: 1px solid var(--line);
+  border-radius: 999px;
+}
+
+.viewer-element-counts strong { color: var(--text); font-size: 12px; }
+
+.viewer-structure-summary {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 6px;
+  margin: 0;
+}
+
+.viewer-structure-summary > div {
+  min-width: 0;
+  padding: 7px;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  background: rgba(255, 255, 255, 0.015);
+}
+
+.viewer-structure-summary dt { margin-bottom: 3px; color: var(--muted); font-size: 9px; }
+.viewer-structure-summary dd { margin: 0; color: var(--text); font: 500 10px 'DM Mono', monospace; overflow-wrap: anywhere; }
+
+.viewer-atom-detail {
+  display: grid;
+  grid-template-columns: auto 1fr 1fr;
+  align-items: center;
+  gap: 8px;
+  min-height: 34px;
+  padding: 7px 9px;
+  color: var(--muted);
+  font: 500 10px 'DM Mono', monospace;
+  border-left: 2px solid var(--amber);
+  background: rgba(255, 209, 102, 0.035);
+}
+
+.viewer-atom-detail strong { color: var(--amber); }
+.viewer-atom-detail.muted { display: flex; border-left-color: var(--line); background: transparent; }
+
+.large-viewer-card .viewer-shell { min-height: 430px; }
+.large-viewer-card .viewer-stage { min-height: 300px; flex: 1; }
+.constraint-viewer-card .viewer-shell,
+.constraint-viewer-card .viewer-stage { height: 100%; min-height: 100%; }
 
 .viewer-overlay {
   position: absolute;
@@ -4524,17 +4748,30 @@ button:disabled {
   }
 }
 
-/* Keep the WebGL canvas bounded inside scrollable result cards. */
+/* Keep only the WebGL stage bounded; the common inspector remains readable. */
 .result-structure-card {
   overflow: hidden;
 }
 
-.result-structure-card .viewer-shell,
-.result-structure-card .structure-viewer {
-  height: 340px;
-  max-height: 340px;
-  min-height: 340px;
+.result-structure-card .viewer-shell {
+  height: auto;
+  min-height: 0;
+  max-height: none;
+}
+
+.result-structure-card .viewer-stage {
+  height: 300px;
+  min-height: 300px;
   overflow: hidden;
+}
+
+@media (max-width: 760px) {
+  .viewer-structure-summary,
+  .viewer-atom-detail,
+  .experimental-evidence-checks > article,
+  .experimental-evidence-checks dl {
+    grid-template-columns: 1fr;
+  }
 }
 
 /* Workflow Studio: quick construction, advanced graph editing, and immutable runs. */

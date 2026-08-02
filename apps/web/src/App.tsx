@@ -2989,6 +2989,7 @@ function App() {
                         mobileAtomIndices1Based={constraintPreview.mobileIndices1Based}
                         onAtomClick={handleConstraintAtomClick}
                         showAtomIndices={showAllConstraintAtomIndices}
+                        showInspector={false}
                         structure={structure?.viewer ?? null}
                       />
                     </div>
