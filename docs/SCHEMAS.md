@@ -342,3 +342,21 @@ Evidence upload is limited to 20 MiB and executable/script extensions are
 rejected. Specs contain at most 200 evidence records; catalog and inference
 requests have bounded result counts. Existing immutable records are not
 overwritten.
+
+## Local credential-management records
+
+`catex.experimental-modeling-capabilities.v2` reports only whether the
+operating-system credential store is available, its backend type, whether each
+provider is configured, and the active source (`environment` or
+`system_keyring`). It never contains a credential value or fingerprint.
+
+`catex.credential-save.v1` is returned only after a provider performs a
+read-only credential verification and the operating-system keyring accepts the
+new value. It contains provider ID, verification metadata such as database
+version or visible model count, and refreshed capabilities. A failed
+verification does not replace an existing credential.
+
+`catex.credential-delete.v1` reports whether a system-keyring entry was
+deleted and returns refreshed capabilities. Environment variables are outside
+this operation and retain higher runtime precedence. Neither mutation is
+project-scoped, and neither record is written into a CatEx project or export.

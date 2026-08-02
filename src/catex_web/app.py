@@ -41,6 +41,7 @@ from catex_app.hpc_gateway import (
 )
 from catex_app.projects import ProjectStore, ProjectStoreError
 from catex_app.reference_cases import ReferenceCaseService
+from catex_app.secure_store import CredentialStore
 from catex_app.services import (
     MAX_STRUCTURE_UPLOAD_BYTES,
     UploadRejected,
@@ -326,6 +327,7 @@ def create_app(
     data_root: str | Path | None = None,
     hpc_gateway: HpcGateway | None = None,
     chgnet_runner: ChgnetRunner | None = None,
+    credential_store: CredentialStore | None = None,
 ) -> FastAPI:
     store = ProjectStore(_persistent_root(data_root))
     calculations = CalculationWorkspaceService(store)
@@ -335,7 +337,7 @@ def create_app(
     analysis = EnergyAnalysisService(store)
     workflow_runtime = WorkflowRuntimeService(store)
     campaigns = CampaignService(store)
-    experimental_modeling = ExperimentalModelingService(store)
+    experimental_modeling = ExperimentalModelingService(store, credential_store)
     application = FastAPI(
         title="CatEx Workbench API",
         version=__version__,
@@ -345,7 +347,7 @@ def create_app(
         CORSMiddleware,
         allow_origins=["http://127.0.0.1:5173", "http://localhost:5173"],
         allow_credentials=False,
-        allow_methods=["GET", "POST", "PUT", "PATCH"],
+        allow_methods=["GET", "POST", "PUT", "PATCH", "DELETE"],
         allow_headers=["content-type"],
     )
     application.include_router(create_platform_router(workflow_runtime, campaigns))
@@ -354,6 +356,7 @@ def create_app(
     @application.get("/api/v1/capabilities")
     def capabilities() -> dict[str, object]:
         chgnet_status = chgnet.capabilities()
+        experimental_modeling_status = experimental_modeling.capabilities()
         return {
             "schema_version": "catex.web-capabilities.v1",
             "catex_version": __version__,
@@ -361,7 +364,7 @@ def create_app(
             "hpc_enabled": True,
             "ssh_enabled": True,
             "hpc_default_active": False,
-            "credentials_persisted": False,
+            "credentials_persisted": bool(experimental_modeling_status["credentials_persisted"]),
             "project_persistence_enabled": True,
             "protocol_editor_enabled": True,
             "local_materialization_enabled": True,
@@ -372,7 +375,7 @@ def create_app(
             "reaction_analysis_enabled": True,
             "mlip_pre_relaxation_enabled": bool(chgnet_status["available"]),
             "experimental_modeling_enabled": True,
-            "experimental_modeling": experimental_modeling.capabilities(),
+            "experimental_modeling": experimental_modeling_status,
             "chgnet": chgnet_status,
             "max_structure_upload_bytes": MAX_STRUCTURE_UPLOAD_BYTES,
         }

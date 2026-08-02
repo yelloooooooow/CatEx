@@ -39,8 +39,43 @@ class MaterialsProjectClient(Protocol):
 class MPAPISummaryClient:
     """Runtime bridge to the official optional ``mp-api`` package."""
 
-    def __init__(self, *, api_key_environment_variable: str = "MP_API_KEY") -> None:
+    def __init__(
+        self,
+        *,
+        api_key: str | None = None,
+        api_key_environment_variable: str = "MP_API_KEY",
+    ) -> None:
+        self.api_key = api_key
         self.api_key_environment_variable = api_key_environment_variable
+
+    def _resolved_api_key(self) -> str:
+        api_key = self.api_key or os.environ.get(self.api_key_environment_variable)
+        if not api_key:
+            raise ValueError(
+                f"{self.api_key_environment_variable} or a system credential is required at runtime"
+            )
+        return api_key
+
+    @staticmethod
+    def _mpr_class() -> type:
+        try:
+            from mp_api.client import MPRester
+        except ImportError as exc:
+            raise ValueError(
+                "Materials Project support requires the optional mp-api dependency"
+            ) from exc
+        return MPRester
+
+    def verify_connection(self) -> str:
+        """Validate one key without persisting it and return the database version."""
+
+        api_key = self._resolved_api_key()
+        mpr_class = self._mpr_class()
+        try:
+            with mpr_class(api_key) as rester:
+                return str(rester.get_database_version())
+        except Exception as exc:
+            raise ValueError("Materials Project credential verification failed") from exc
 
     def fetch_summaries(
         self,
@@ -48,18 +83,6 @@ class MPAPISummaryClient:
         required_elements: tuple[str, ...],
         maximum_results: int,
     ) -> tuple[str, Sequence[object]]:
-        api_key = os.environ.get(self.api_key_environment_variable)
-        if not api_key:
-            raise ValueError(
-                f"{self.api_key_environment_variable} is required at runtime and is not stored"
-            )
-        try:
-            from mp_api.client import MPRester
-        except ImportError as exc:
-            raise ValueError(
-                "Materials Project support requires the optional mp-api dependency"
-            ) from exc
-
         fields = [
             "material_id",
             "formula_pretty",
@@ -68,8 +91,10 @@ class MPAPISummaryClient:
             "is_stable",
             "deprecated",
         ]
+        api_key = self._resolved_api_key()
+        mpr_class = self._mpr_class()
         try:
-            with MPRester(api_key) as rester:
+            with mpr_class(api_key) as rester:
                 database_version = str(rester.get_database_version())
                 documents = rester.materials.summary.search(
                     elements=list(required_elements),

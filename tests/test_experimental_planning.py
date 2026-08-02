@@ -269,3 +269,28 @@ def test_openai_transport_uses_strict_responses_payload_without_persistence(
         OpenAIResponsesTransport(model="x", endpoint="https://example.invalid")
     with pytest.raises(ValueError, match="timeout_seconds"):
         OpenAIResponsesTransport(model="x", timeout_seconds=0)
+
+
+def test_openai_transport_verifies_one_ephemeral_direct_key(monkeypatch) -> None:
+    captured = {}
+
+    def fake_urlopen(request, *, timeout):
+        captured["authorization"] = request.headers["Authorization"]
+        captured["method"] = request.method
+        captured["timeout"] = timeout
+        return _Response({"object": "list", "data": [{"id": "test-model"}]})
+
+    monkeypatch.delenv("OPENAI_API_KEY", raising=False)
+    monkeypatch.setattr(planning_module.urllib.request, "urlopen", fake_urlopen)
+    transport = OpenAIResponsesTransport(
+        model="explicit-test-model",
+        api_key="direct-openai-test-key",
+        timeout_seconds=9,
+    )
+
+    assert transport.verify_api_key() == 1
+    assert captured == {
+        "authorization": "Bearer direct-openai-test-key",
+        "method": "GET",
+        "timeout": 9,
+    }

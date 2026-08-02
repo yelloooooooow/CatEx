@@ -32,11 +32,22 @@ from catex.experimental import (
     parse_xrd_path,
     simulate_xrd_on_grid,
 )
-from catex.experimental.materials_project import fetch_materials_project_structures
+from catex.experimental.materials_project import (
+    MPAPISummaryClient,
+    fetch_materials_project_structures,
+)
 from catex.experimental.models import StructureReference, StructureSourceKind
 from catex.experimental.providers import CatalogEntry, StructureProvider
 from catex.hashing import structure_hash
 from catex_app.projects import ProjectStore
+from catex_app.secure_store import (
+    CredentialProvider,
+    CredentialStore,
+    CredentialStoreError,
+    SystemCredentialStore,
+    environment_variable,
+    resolve_credential,
+)
 from catex_app.services import _viewer_payload
 
 MAX_EVIDENCE_UPLOAD_BYTES = 20 * 1024 * 1024
@@ -174,15 +185,47 @@ class _ProjectStructureProvider:
 class ExperimentalModelingService:
     """Append-oriented application service used by the local Web workbench."""
 
-    def __init__(self, store: ProjectStore) -> None:
+    def __init__(
+        self,
+        store: ProjectStore,
+        credential_store: CredentialStore | None = None,
+    ) -> None:
         self.store = store
+        self.credential_store = credential_store or SystemCredentialStore()
+
+    def _credential_status(self, provider: CredentialProvider) -> dict[str, Any]:
+        environment_configured = bool(os.environ.get(environment_variable(provider), "").strip())
+        saved_to_system = False
+        store_readable = False
+        store_status = self.credential_store.status()
+        if store_status.available:
+            try:
+                saved_to_system = bool(self.credential_store.get(provider))
+                store_readable = True
+            except CredentialStoreError:
+                store_readable = False
+        source = (
+            "environment"
+            if environment_configured
+            else "system_keyring"
+            if saved_to_system
+            else None
+        )
+        return {
+            "configured": source is not None,
+            "source": source,
+            "environment_configured": environment_configured,
+            "saved_to_system": saved_to_system,
+            "system_store_readable": store_readable,
+        }
 
     def capabilities(self) -> dict[str, Any]:
         mp_client_installed = importlib.util.find_spec("mp_api") is not None
-        mp_key_configured = bool(os.environ.get("MP_API_KEY"))
-        openai_key_configured = bool(os.environ.get("OPENAI_API_KEY"))
+        store_status = self.credential_store.status()
+        mp_credential = self._credential_status("materials_project")
+        openai_credential = self._credential_status("openai")
         return {
-            "schema_version": "catex.experimental-modeling-capabilities.v1",
+            "schema_version": "catex.experimental-modeling-capabilities.v2",
             "enabled": True,
             "max_evidence_upload_bytes": MAX_EVIDENCE_UPLOAD_BYTES,
             "rule_planner": {"available": True, "external_api": False},
@@ -190,22 +233,99 @@ class ExperimentalModelingService:
                 "project": {"available": True, "requires_key": False},
                 "optimade": {"available": True, "requires_key": False},
                 "materials_project": {
-                    "available": mp_client_installed and mp_key_configured,
+                    "available": mp_client_installed and mp_credential["configured"],
                     "client_installed": mp_client_installed,
-                    "key_configured": mp_key_configured,
+                    "key_configured": mp_credential["configured"],
+                    "credential_source": mp_credential["source"],
+                    "saved_to_system": mp_credential["saved_to_system"],
                     "requires_key": True,
                     "api_key_environment_variable": "MP_API_KEY",
                 },
             },
             "gpt_planner": {
-                "available": openai_key_configured,
-                "key_configured": openai_key_configured,
+                "available": openai_credential["configured"],
+                "key_configured": openai_credential["configured"],
+                "credential_source": openai_credential["source"],
+                "saved_to_system": openai_credential["saved_to_system"],
                 "api_key_environment_variable": "OPENAI_API_KEY",
                 "model": os.environ.get("CATEX_OPENAI_MODEL", "gpt-5.6-sol"),
                 "responses_api": True,
                 "stores_responses": False,
             },
-            "credentials_persisted": False,
+            "credential_store": store_status.to_dict(),
+            "credentials_persisted": store_status.available and store_status.persistent,
+        }
+
+    @staticmethod
+    def _validated_secret(secret: str) -> str:
+        value = secret.strip()
+        if not 8 <= len(value) <= 4096:
+            raise ExperimentalModelingError("credential must contain between 8 and 4096 characters")
+        if any(ord(character) < 33 or ord(character) == 127 for character in value):
+            raise ExperimentalModelingError(
+                "credential must not contain whitespace or control characters"
+            )
+        return value
+
+    def save_credential(
+        self,
+        provider: CredentialProvider,
+        secret: str,
+    ) -> dict[str, Any]:
+        """Verify and persist one credential in the operating-system keyring."""
+
+        value = self._validated_secret(secret)
+        status = self.credential_store.status()
+        if not status.available or not status.persistent:
+            raise ExperimentalModelingError(
+                "a supported operating-system credential store is not available"
+            )
+        verification: dict[str, Any]
+        try:
+            if provider == "materials_project":
+                if importlib.util.find_spec("mp_api") is None:
+                    raise ExperimentalModelingError(
+                        "Materials Project support requires the optional mp-api dependency"
+                    )
+                verification = {
+                    "database_version": MPAPISummaryClient(api_key=value).verify_connection()
+                }
+            elif provider == "openai":
+                verification = {
+                    "visible_model_count": OpenAIResponsesTransport(
+                        model=os.environ.get("CATEX_OPENAI_MODEL", "gpt-5.6-sol"),
+                        api_key=value,
+                    ).verify_api_key()
+                }
+            else:
+                raise ExperimentalModelingError("unsupported credential provider")
+        except ValueError as exc:
+            raise ExperimentalModelingError(str(exc)) from exc
+        try:
+            self.credential_store.set(provider, value)
+        except CredentialStoreError as exc:
+            raise ExperimentalModelingError(str(exc)) from exc
+        return {
+            "schema_version": "catex.credential-save.v1",
+            "provider": provider,
+            "saved_to_system": True,
+            "verified": True,
+            "verification": verification,
+            "capabilities": self.capabilities(),
+        }
+
+    def delete_credential(self, provider: CredentialProvider) -> dict[str, Any]:
+        """Delete one CatEx credential from the operating-system keyring."""
+
+        try:
+            deleted = self.credential_store.delete(provider)
+        except CredentialStoreError as exc:
+            raise ExperimentalModelingError(str(exc)) from exc
+        return {
+            "schema_version": "catex.credential-delete.v1",
+            "provider": provider,
+            "deleted_from_system": deleted,
+            "capabilities": self.capabilities(),
         }
 
     def _root(self, project_id: str) -> Path:
@@ -473,6 +593,16 @@ class ExperimentalModelingService:
         client: Any = None,
     ) -> dict[str, Any]:
         provider_id = f"materials-project-{uuid4().hex[:8]}"
+        if client is None:
+            credential = resolve_credential(
+                self.credential_store,
+                "materials_project",
+            )
+            if credential is None:
+                raise ExperimentalModelingError(
+                    "save a Materials Project credential or configure MP_API_KEY first"
+                )
+            client = MPAPISummaryClient(api_key=credential.value)
         try:
             result = fetch_materials_project_structures(
                 provider_id=provider_id,
@@ -638,12 +768,16 @@ class ExperimentalModelingService:
         if planner_kind == "rule":
             planner = RuleCandidatePlanner()
         elif planner_kind == "gpt":
-            if not os.environ.get("OPENAI_API_KEY"):
+            credential = resolve_credential(self.credential_store, "openai")
+            if credential is None:
                 raise ExperimentalModelingError(
-                    "OPENAI_API_KEY is required for the optional GPT planner"
+                    "save an OpenAI credential or configure OPENAI_API_KEY first"
                 )
             planner = GPTCandidatePlanner(
-                OpenAIResponsesTransport(model=os.environ.get("CATEX_OPENAI_MODEL", "gpt-5.6-sol"))
+                OpenAIResponsesTransport(
+                    model=os.environ.get("CATEX_OPENAI_MODEL", "gpt-5.6-sol"),
+                    api_key=credential.value,
+                )
             )
         else:
             raise ExperimentalModelingError("planner_kind must be rule or gpt")

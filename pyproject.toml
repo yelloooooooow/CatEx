@@ -4,7 +4,7 @@ build-backend = "hatchling.build"
 
 [project]
 name = "catex-workbench"
-version = "0.32.0"
+version = "0.32.1"
 description = "CatEx: traceable scientific core and interactive workbench for catalysis workflows."
 readme = "README.md"
 license = "BSD-3-Clause"
@@ -22,6 +22,7 @@ dependencies = [
 [project.optional-dependencies]
 web = [
   "fastapi>=0.116,<1",
+  "keyring>=25.7,<26",
   "mp-api>=0.46.4,<0.47",
   "paramiko>=3.5,<5",
   "python-multipart>=0.0.20,<1",
@@ -73,6 +74,7 @@ include = [
   "/docs/EXPERIMENT_INFORMED_MODELING.md",
   "/docs/adr/0006-experiment-informed-modeling.md",
   "/docs/adr/0007-experimental-modeling-workbench.md",
+  "/docs/adr/0008-system-credential-storage.md",
   "/docs/WEB_POC.md",
   "/docs/adr/0003-web-workbench-architecture.md",
   "/docs/adr/0004-workflow-runtime-and-campaigns.md",

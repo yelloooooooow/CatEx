@@ -119,6 +119,33 @@ def test_materials_project_client_wraps_external_failures_without_credential_det
     assert "synthetic-test-key" not in str(captured.value)
 
 
+def test_materials_project_client_accepts_one_ephemeral_direct_key(monkeypatch) -> None:
+    import mp_api.client
+
+    captured: dict[str, str] = {}
+
+    class _VerifyingMPRester:
+        def __init__(self, api_key: str) -> None:
+            captured["api_key"] = api_key
+
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *_args):
+            return False
+
+        def get_database_version(self) -> str:
+            return "2026.07.31"
+
+    monkeypatch.delenv("MP_API_KEY", raising=False)
+    monkeypatch.setattr(mp_api.client, "MPRester", _VerifyingMPRester)
+
+    version = MPAPISummaryClient(api_key="direct-test-key").verify_connection()
+
+    assert version == "2026.07.31"
+    assert captured == {"api_key": "direct-test-key"}
+
+
 def test_application_run_records_implicitly_selected_catalog_revision(tmp_path: Path) -> None:
     service = ExperimentalModelingService(ProjectStore(tmp_path))
     project_id = service.store.create_project(

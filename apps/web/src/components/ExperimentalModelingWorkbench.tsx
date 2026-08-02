@@ -4,6 +4,7 @@ import {
   CheckCircle2,
   Database,
   FileUp,
+  KeyRound,
   Layers3,
   LoaderCircle,
   Play,
@@ -111,6 +112,113 @@ function shortHash(value: string): string {
 
 function formatScore(value: number | null | undefined): string {
   return value == null ? '—' : value.toFixed(3)
+}
+
+interface CredentialEditorProps {
+  provider: 'materials_project' | 'openai'
+  source: 'environment' | 'system_keyring' | null
+  savedToSystem: boolean
+  storeAvailable: boolean
+  busy: boolean
+  onSave: (provider: 'materials_project' | 'openai', secret: string) => Promise<void>
+  onDelete: (provider: 'materials_project' | 'openai') => Promise<void>
+}
+
+function CredentialEditor({
+  provider,
+  source,
+  savedToSystem,
+  storeAvailable,
+  busy,
+  onSave,
+  onDelete,
+}: CredentialEditorProps) {
+  const { tr } = useI18n()
+  const [secret, setSecret] = useState('')
+  const label = provider === 'materials_project' ? 'Materials Project API key' : 'OpenAI API key'
+
+  const save = async () => {
+    const submittedSecret = secret
+    setSecret('')
+    await onSave(provider, submittedSecret)
+  }
+
+  return (
+    <form
+      className="experimental-credential-editor"
+      onSubmit={(event) => {
+        event.preventDefault()
+        void save()
+      }}
+    >
+      <div className="credential-status-line">
+        <KeyRound size={15} />
+        <span>
+          <strong>{source ? tr('凭据已配置', 'Credential configured') : tr('尚未配置凭据', 'Credential not configured')}</strong>
+          <small>
+            {source === 'system_keyring'
+              ? tr('安全保存在本机系统密钥库', 'Securely stored in the system keyring')
+              : source === 'environment'
+                ? tr('当前由环境变量提供', 'Currently provided by an environment variable')
+                : storeAvailable
+                  ? tr('保存前会先联网验证', 'The key is verified before it is saved')
+                  : tr('未检测到受支持的系统密钥库', 'No supported system keyring was detected')}
+          </small>
+        </span>
+      </div>
+      <input
+        aria-hidden="true"
+        autoComplete="username"
+        name={`catex-${provider}-account`}
+        readOnly
+        tabIndex={-1}
+        type="text"
+        value={provider}
+        hidden
+      />
+      <label>
+        {label}
+        <input
+          aria-label={label}
+          autoCapitalize="none"
+          autoComplete="new-password"
+          disabled={busy || !storeAvailable}
+          name={`catex-${provider}-credential`}
+          onChange={(event) => setSecret(event.target.value)}
+          placeholder={tr('输入后安全保存到本机', 'Enter and save securely on this computer')}
+          spellCheck={false}
+          type="password"
+          value={secret}
+        />
+      </label>
+      <div className="credential-actions">
+        <button
+          className="secondary-button accent"
+          disabled={busy || !storeAvailable || secret.trim().length < 8}
+          type="submit"
+        >
+          {busy ? <LoaderCircle className="spin" size={14} /> : <ShieldCheck size={14} />}
+          {tr('验证并安全保存', 'Verify and save securely')}
+        </button>
+        {savedToSystem && (
+          <button
+            className="secondary-button danger"
+            disabled={busy}
+            onClick={() => void onDelete(provider)}
+            type="button"
+          >
+            <Trash2 size={14} /> {tr('从本机清除', 'Remove from this computer')}
+          </button>
+        )}
+      </div>
+      <small>
+        {tr(
+          '密钥不会进入项目、导出文件、浏览器存储或 Git。',
+          'The key is never written to projects, exports, browser storage, or Git.',
+        )}
+      </small>
+    </form>
+  )
 }
 
 function XrdComparisonPlot({ run }: { run: ExperimentalModelingRun }) {
@@ -351,6 +459,54 @@ export function ExperimentalModelingWorkbench({
     }))
   }
 
+  const saveCredential = async (
+    provider: 'materials_project' | 'openai',
+    secret: string,
+  ) => {
+    setBusy(`credential-${provider}`)
+    try {
+      const result = await api.saveExperimentalCredential(provider, secret)
+      setCapabilities(result.capabilities)
+      onMessage(
+        'success',
+        provider === 'materials_project'
+          ? tr(
+              'Materials Project 密钥已验证并安全保存到本机系统密钥库。',
+              'The Materials Project key was verified and saved in the system keyring.',
+            )
+          : tr(
+              'OpenAI 密钥已验证并安全保存到本机系统密钥库。',
+              'The OpenAI key was verified and saved in the system keyring.',
+            ),
+      )
+    } catch (error) {
+      reportError(error, 'Credential verification or storage failed.')
+    } finally {
+      setBusy(null)
+    }
+  }
+
+  const deleteCredential = async (
+    provider: 'materials_project' | 'openai',
+  ) => {
+    setBusy(`credential-${provider}`)
+    try {
+      const result = await api.deleteExperimentalCredential(provider)
+      setCapabilities(result.capabilities)
+      onMessage(
+        'success',
+        tr(
+          '凭据已从本机系统密钥库清除。',
+          'The credential was removed from the system keyring.',
+        ),
+      )
+    } catch (error) {
+      reportError(error, 'Credential removal failed.')
+    } finally {
+      setBusy(null)
+    }
+  }
+
   const fetchOptimade = async () => {
     if (!projectId) return
     setBusy('optimade')
@@ -491,7 +647,12 @@ export function ExperimentalModelingWorkbench({
         <span className={`capability-chip ${capabilities?.gpt_planner.available ? 'available' : 'muted'}`}>
           <Sparkles size={13} /> GPT {capabilities?.gpt_planner.available ? capabilities.gpt_planner.model : tr('可选 / 未配置', 'optional / not configured')}
         </span>
-        <span className="capability-chip muted">{tr('密钥不会保存到项目', 'Credentials are never persisted')}</span>
+        <span className={`capability-chip ${capabilities?.credential_store.available ? 'available' : 'muted'}`}>
+          <KeyRound size={13} />
+          {capabilities?.credential_store.available
+            ? tr('系统密钥库可用', 'System keyring ready')
+            : tr('系统密钥库不可用', 'System keyring unavailable')}
+        </span>
       </div>
 
       <ol className="experimental-stepper">
@@ -588,10 +749,19 @@ export function ExperimentalModelingWorkbench({
             </section>
             <section>
               <h4>Materials Project</h4>
-              <p>{tr('提供稳定性元数据和数据库版本。API key 仅由后端环境变量读取。', 'Adds stability metadata and database version. The key is read only from the backend environment.')}</p>
+              <p>{tr('提供稳定性元数据和数据库版本。密钥验证后保存在本机系统密钥库。', 'Adds stability metadata and database version. The verified key is stored in the system keyring.')}</p>
+              <CredentialEditor
+                busy={busy === 'credential-materials_project'}
+                onDelete={deleteCredential}
+                onSave={saveCredential}
+                provider="materials_project"
+                savedToSystem={capabilities?.providers.materials_project.saved_to_system ?? false}
+                source={capabilities?.providers.materials_project.credential_source ?? null}
+                storeAvailable={capabilities?.credential_store.available ?? false}
+              />
               <label>{tr('最大结果数', 'Maximum results')}<input min="1" max="1000" type="number" value={providerMaximumResults} onChange={(event) => setProviderMaximumResults(event.target.value)} /></label>
               <button className="secondary-button accent" disabled={busy !== null || !capabilities?.providers.materials_project.available} onClick={() => void fetchMaterialsProject()} type="button">{busy === 'materials-project' ? <LoaderCircle className="spin" size={15} /> : <Database size={15} />}{tr('获取 MP 快照', 'Fetch MP snapshot')}</button>
-              {!capabilities?.providers.materials_project.available && <small>{capabilities?.providers.materials_project.client_installed ? tr('后端未检测到 MP_API_KEY。', 'MP_API_KEY was not detected by the backend.') : tr('需要安装 mp-api 并配置 MP_API_KEY。', 'Install mp-api and configure MP_API_KEY.')}</small>}
+              {!capabilities?.providers.materials_project.client_installed && <small>{tr('需要安装 mp-api 才能连接 Materials Project。', 'Install mp-api to connect to Materials Project.')}</small>}
             </section>
           </div>
           <div className="experimental-catalog-list">
@@ -607,6 +777,15 @@ export function ExperimentalModelingWorkbench({
 
         <article className="experimental-card">
           <div className="card-heading"><div><span className="eyebrow">INFERENCE SETTINGS</span><h3>{tr('候选推断', 'Candidate inference')}</h3></div><Play size={18} /></div>
+          <CredentialEditor
+            busy={busy === 'credential-openai'}
+            onDelete={deleteCredential}
+            onSave={saveCredential}
+            provider="openai"
+            savedToSystem={capabilities?.gpt_planner.saved_to_system ?? false}
+            source={capabilities?.gpt_planner.credential_source ?? null}
+            storeAvailable={capabilities?.credential_store.available ?? false}
+          />
           <div className="experimental-form-grid">
             <label>{tr('规划器', 'Planner')}<select value={plannerKind} onChange={(event) => setPlannerKind(event.target.value as 'rule' | 'gpt')}><option value="rule">rule · local</option><option disabled={!capabilities?.gpt_planner.available} value="gpt">gpt · {capabilities?.gpt_planner.model}</option></select></label>
             <label>{tr('代表性模型上限', 'Representative limit')}<input min="1" max="50" type="number" value={maximumRepresentatives} onChange={(event) => setMaximumRepresentatives(event.target.value)} /></label>

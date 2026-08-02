@@ -12,6 +12,7 @@ import type {
   EnergyDerivation,
   ExperimentalCandidateReview,
   ExperimentalCatalogSnapshot,
+  ExperimentalCredentialMutation,
   ExperimentalEvidenceArtifact,
   ExperimentalMaterialization,
   ExperimentalModelingCapabilities,
@@ -171,6 +172,25 @@ export const api = {
   experimentalModelingCapabilities: () =>
     requestJson<ExperimentalModelingCapabilities>(
       '/api/v1/experimental-modeling/capabilities',
+    ),
+  saveExperimentalCredential: (
+    provider: 'materials_project' | 'openai',
+    secret: string,
+  ) =>
+    requestJson<ExperimentalCredentialMutation>(
+      `/api/v1/experimental-modeling/credentials/${provider}`,
+      {
+        method: 'PUT',
+        headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({ secret }),
+      },
+    ),
+  deleteExperimentalCredential: (
+    provider: 'materials_project' | 'openai',
+  ) =>
+    requestJson<ExperimentalCredentialMutation>(
+      `/api/v1/experimental-modeling/credentials/${provider}`,
+      { method: 'DELETE' },
     ),
   experimentalEvidence: async (projectId: string) => {
     const payload = await requestJson<{ evidence: ExperimentalEvidenceArtifact[] }>(

@@ -4,6 +4,7 @@
 - Date: 2026-07-31
 - Supersedes: none
 - Extends: ADR 0006
+- Credential handling superseded by: ADR 0008
 
 ## Context
 
@@ -52,8 +53,7 @@ template connects the review gate to the existing VASP path.
 - State mismatch, ambiguity, assumptions, and suggested next experiments remain
   visible in the primary interface.
 - Database structure access is reproducible at the local snapshot level.
-- Credentials must be configured before the server starts; there is
-  intentionally no browser key form.
+- The original environment-only credential decision is superseded by ADR 0008.
 - The first XRD fitter is transparent and useful for ranking/regression, but is
   not a Rietveld engine and does not establish universal error tolerances.
 - The Web service stores more immutable artifacts, trading disk space for

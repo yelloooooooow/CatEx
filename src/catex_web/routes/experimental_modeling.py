@@ -5,7 +5,7 @@ from __future__ import annotations
 from typing import Annotated, Any, Literal
 
 from fastapi import APIRouter, File, HTTPException, UploadFile
-from pydantic import BaseModel, ConfigDict, Field
+from pydantic import BaseModel, ConfigDict, Field, SecretStr
 
 from catex_app.experimental_modeling import (
     MAX_EVIDENCE_UPLOAD_BYTES,
@@ -106,6 +106,12 @@ class MaterialsProjectSearchRequest(BaseModel):
     maximum_results: int = Field(default=50, ge=1, le=1000)
 
 
+class CredentialSaveRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    secret: SecretStr
+
+
 class XRDSettingsRequest(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
@@ -171,6 +177,25 @@ def create_experimental_modeling_router(
     @router.get("/experimental-modeling/capabilities")
     def capabilities() -> dict[str, Any]:
         return service.capabilities()
+
+    @router.put("/experimental-modeling/credentials/{provider}")
+    def save_credential(
+        provider: Literal["materials_project", "openai"],
+        request: CredentialSaveRequest,
+    ) -> dict[str, Any]:
+        try:
+            return service.save_credential(provider, request.secret.get_secret_value())
+        except ExperimentalModelingError as error:
+            raise _api_error(error) from error
+
+    @router.delete("/experimental-modeling/credentials/{provider}")
+    def delete_credential(
+        provider: Literal["materials_project", "openai"],
+    ) -> dict[str, Any]:
+        try:
+            return service.delete_credential(provider)
+        except ExperimentalModelingError as error:
+            raise _api_error(error) from error
 
     @router.get("/projects/{project_id}/experimental-modeling/evidence")
     def list_evidence(project_id: str) -> dict[str, Any]:

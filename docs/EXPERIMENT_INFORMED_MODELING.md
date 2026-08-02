@@ -171,19 +171,27 @@ user.
 ### Optional Materials Project import
 
 The Web workbench can explicitly query Materials Project through the official
-`mp-api` client. The client is an optional Web dependency and the credential is
-read only from the CatEx server process:
+`mp-api` client. Enter the key in the Materials Project credential card and
+select **Verify and save securely**. CatEx verifies the key before replacing
+any existing value, then stores it in the operating-system credential manager.
+On Windows this is Windows Credential Manager rather than a CatEx file.
+
+Environment variables remain an automation fallback and take precedence over
+the system credential:
 
 ```powershell
 $env:MP_API_KEY = "<your rotated Materials Project key>"
 pnpm web:poc
 ```
 
-Do not put a real key in a project, browser form, exported bundle, Git file, or
-support log. The capability endpoint reports only whether the client and key
-are available. A search records the database version and result provenance in
-an immutable local catalog snapshot; it never records the key. Rotate any key
-that has previously been pasted into chat or another persistent message.
+Do not put a real key in a project field, exported bundle, Git file, or support
+log. The dedicated password field holds the value only long enough to send it
+to the loopback backend and clears immediately on submission. It is never
+written to browser storage. Capability and mutation responses report only
+status/source metadata. A search records the database version and result
+provenance in an immutable local catalog snapshot; it never records the key.
+Rotate any key that has previously been pasted into chat or another persistent
+message.
 
 ## Web workbench
 
@@ -208,9 +216,13 @@ Materialization requires all of:
 - the exact report SHA-256 copied from the run;
 - `approved_write=true`.
 
-The Web page intentionally has no API-key input. Provider and GPT capability
-badges show readiness without exposing credential values. The rule planner and
-project-local structures remain usable without any API or agent.
+The Web page provides separate password inputs for Materials Project and
+OpenAI. Each key is verified before it is stored in the system credential
+manager. A user can remove either stored key from the same page. Provider and
+GPT capability responses show only readiness, source (`environment` or
+`system_keyring`), and whether a system entry exists; they never return a
+credential value. The rule planner and project-local structures remain usable
+without any API or agent.
 
 ## CLI
 
@@ -245,10 +257,11 @@ catex infer-experimental-models experiment.json `
   --format json
 ```
 
-The API key is read at request time and is never persisted. No default model is
-hard-coded. The GPT output is a strict plan containing only known evidence IDs,
-known parent-reference keys, and allowlisted operations. Local validators
-remain authoritative, and arbitrary generated Python is never executed.
+For CLI use, the API key is read from the environment at request time. Web
+users may instead save it in the operating-system credential manager. The GPT
+output is a strict plan containing only known evidence IDs, known
+parent-reference keys, and allowlisted operations. Local validators remain
+authoritative, and arbitrary generated Python is never executed.
 
 ## Interpretation of status
 

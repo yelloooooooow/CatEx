@@ -820,7 +820,7 @@ export type ExperimentalEvidenceKind =
   | 'other'
 
 export interface ExperimentalModelingCapabilities {
-  schema_version: 'catex.experimental-modeling-capabilities.v1'
+  schema_version: 'catex.experimental-modeling-capabilities.v2'
   enabled: boolean
   max_evidence_upload_bytes: number
   rule_planner: { available: boolean; external_api: false }
@@ -831,6 +831,8 @@ export interface ExperimentalModelingCapabilities {
       available: boolean
       client_installed: boolean
       key_configured: boolean
+      credential_source: 'environment' | 'system_keyring' | null
+      saved_to_system: boolean
       requires_key: true
       api_key_environment_variable: 'MP_API_KEY'
     }
@@ -838,12 +840,33 @@ export interface ExperimentalModelingCapabilities {
   gpt_planner: {
     available: boolean
     key_configured: boolean
+    credential_source: 'environment' | 'system_keyring' | null
+    saved_to_system: boolean
     api_key_environment_variable: 'OPENAI_API_KEY'
     model: string
     responses_api: true
     stores_responses: false
   }
-  credentials_persisted: false
+  credential_store: {
+    available: boolean
+    persistent: boolean
+    backend: string | null
+    reason: string | null
+  }
+  credentials_persisted: boolean
+}
+
+export interface ExperimentalCredentialMutation {
+  schema_version: 'catex.credential-save.v1' | 'catex.credential-delete.v1'
+  provider: 'materials_project' | 'openai'
+  saved_to_system?: boolean
+  verified?: boolean
+  verification?: {
+    database_version?: string
+    visible_model_count?: number
+  }
+  deleted_from_system?: boolean
+  capabilities: ExperimentalModelingCapabilities
 }
 
 export interface ExperimentalEvidenceArtifact {

@@ -327,6 +327,7 @@ class OpenAIResponsesTransport:
         self,
         *,
         model: str,
+        api_key: str | None = None,
         api_key_environment_variable: str = "OPENAI_API_KEY",
         endpoint: str = "https://api.openai.com/v1/responses",
         timeout_seconds: float = 60.0,
@@ -338,9 +339,40 @@ class OpenAIResponsesTransport:
         if not 1 <= timeout_seconds <= 300:
             raise ValueError("timeout_seconds must be between 1 and 300")
         self.model = model.strip()
+        self.api_key = api_key
         self.api_key_environment_variable = api_key_environment_variable
         self.endpoint = endpoint
         self.timeout_seconds = timeout_seconds
+
+    def _resolved_api_key(self) -> str:
+        api_key = self.api_key or os.environ.get(self.api_key_environment_variable)
+        if not api_key:
+            raise ValueError(
+                f"{self.api_key_environment_variable} or a system credential is required at runtime"
+            )
+        return api_key
+
+    def verify_api_key(self) -> int:
+        """Validate the credential with the documented read-only models endpoint."""
+
+        request = urllib.request.Request(
+            "https://api.openai.com/v1/models",
+            headers={"Authorization": f"Bearer {self._resolved_api_key()}"},
+            method="GET",
+        )
+        try:
+            with urllib.request.urlopen(request, timeout=self.timeout_seconds) as response:
+                payload = json.loads(response.read().decode("utf-8"))
+        except urllib.error.HTTPError as exc:
+            raise ValueError(f"OpenAI credential verification returned HTTP {exc.code}") from exc
+        except (urllib.error.URLError, UnicodeDecodeError, json.JSONDecodeError) as exc:
+            raise ValueError("OpenAI credential verification failed") from exc
+        if not isinstance(payload, Mapping):
+            raise ValueError("OpenAI credential verification returned an invalid response")
+        models = payload.get("data")
+        if not isinstance(models, Sequence) or isinstance(models, str | bytes):
+            raise ValueError("OpenAI credential verification returned an invalid response")
+        return len(models)
 
     @staticmethod
     def _output_text(response: Mapping[str, Any]) -> str:
@@ -365,11 +397,7 @@ class OpenAIResponsesTransport:
         user_payload: Mapping[str, Any],
         output_schema: Mapping[str, Any],
     ) -> Mapping[str, Any]:
-        api_key = os.environ.get(self.api_key_environment_variable)
-        if not api_key:
-            raise ValueError(
-                f"{self.api_key_environment_variable} is required at runtime and is not stored"
-            )
+        api_key = self._resolved_api_key()
         request_payload = {
             "model": self.model,
             "store": False,

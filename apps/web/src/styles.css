@@ -507,6 +507,59 @@ button:focus-visible {
   line-height: 1.5;
 }
 
+.experimental-credential-editor {
+  display: grid;
+  gap: 8px;
+  padding: 10px;
+  border: 1px solid rgba(98, 213, 173, 0.2);
+  border-radius: 10px;
+  background: rgba(98, 213, 173, 0.035);
+}
+
+.credential-status-line {
+  display: flex;
+  align-items: flex-start;
+  gap: 8px;
+  color: var(--mint);
+}
+
+.credential-status-line > span {
+  display: flex;
+  min-width: 0;
+  flex-direction: column;
+  gap: 2px;
+}
+
+.credential-status-line strong {
+  color: var(--text-bright);
+  font-size: 11px;
+}
+
+.credential-status-line small,
+.experimental-credential-editor > small {
+  color: var(--muted);
+  font-size: 9px;
+  line-height: 1.45;
+}
+
+.credential-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 7px;
+}
+
+.credential-actions .secondary-button {
+  min-height: 32px;
+  padding: 7px 9px;
+  font-size: 10px;
+}
+
+.credential-actions .secondary-button.danger {
+  color: var(--red);
+  border-color: rgba(232, 111, 111, 0.28);
+  background: rgba(232, 111, 111, 0.06);
+}
+
 .experimental-catalog-list {
   display: grid;
   gap: 6px;

@@ -16,7 +16,10 @@ def test_web_capabilities_and_default_template(tmp_path: Path) -> None:
     assert capabilities.json()["hpc_enabled"] is True
     assert capabilities.json()["ssh_enabled"] is True
     assert capabilities.json()["hpc_default_active"] is False
-    assert capabilities.json()["credentials_persisted"] is False
+    assert capabilities.json()["credentials_persisted"] is (
+        capabilities.json()["experimental_modeling"]["credential_store"]["available"]
+        and capabilities.json()["experimental_modeling"]["credential_store"]["persistent"]
+    )
     assert capabilities.json()["project_persistence_enabled"] is True
     assert template.status_code == 200
     assert template.json()["validation"]["valid"] is True

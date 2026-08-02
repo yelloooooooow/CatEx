@@ -126,7 +126,11 @@ def test_web_experimental_modeling_review_and_materialization(tmp_path: Path) ->
         exported = client.get(f"/api/v1/projects/{project_id}/export")
 
     assert capabilities.status_code == 200
-    assert capabilities.json()["credentials_persisted"] is False
+    assert capabilities.json()["schema_version"] == ("catex.experimental-modeling-capabilities.v2")
+    assert capabilities.json()["credentials_persisted"] is (
+        capabilities.json()["credential_store"]["available"]
+        and capabilities.json()["credential_store"]["persistent"]
+    )
     assert (
         capabilities.json()["providers"]["materials_project"]["api_key_environment_variable"]
         == "MP_API_KEY"
