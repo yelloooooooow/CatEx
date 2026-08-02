@@ -38,7 +38,8 @@ remove Mo or change the oxygen coverage.
 The benchmark should deliberately contain competing model classes rather than
 one favored structure:
 
-1. ordered intermetallic Ni3Mo bulk and several low-index/stepped surfaces;
+1. ordered intermetallic Ni3Mo and Ni4Mo bulk models with several
+   low-index/stepped surfaces;
 2. dilute substitutional Mo in fcc Ni, using enumerated cells and SQS models
    over the ICP composition interval;
 3. Ni-rich/Mo-deficient variants representing activation or leaching;
@@ -53,6 +54,12 @@ one favored structure:
 These families are grounded in published modeling choices, but publication is
 not treated as validation:
 
+- A routine-characterization example assigned electrodeposited Ni4Mo from an
+  fcc-Ni peak shift in XRD, a 2.1 angstrom HRTEM spacing, SAED crystallinity,
+  and a surface Ni:Mo ratio close to 4:1 from XPS. The same paper also observed
+  surface Ni(OH)2 and oxidized Ni/Mo, showing that "Ni4Mo" did not describe
+  every sampled region or state
+  ([Nature Communications 2018](https://doi.org/10.1038/s41467-018-04358-7)).
 - Wijten et al. used the SEM-EDX Ni:Mo ratio to choose Ni3Mo, considered
   multiple BFDH facets and a stepped surface, and then showed experimentally
   that Mo leaching changes the catalyst during operation
@@ -72,6 +79,11 @@ not treated as validation:
   identified an O-covered Ni3Mo(111) working surface, illustrating why the
   operating state can matter more than the pristine slab
   ([Advanced Science 2026](https://doi.org/10.1002/advs.202518742)).
+
+An additional phase-library control should include the reported
+nanocrystalline substitutional Ni–Mo solid-solution interpretation at about
+10 at.% Mo, where most sharp Ni peaks collapse into a broad (111) feature
+([International Journal of Electrochemical Science 2014](https://doi.org/10.1016/S1452-3981(23)10867-4)).
 
 ## Validation contract
 
