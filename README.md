@@ -8,7 +8,7 @@
 
 **CatEx (Catalysis Exploration Workbench)** 是一个面向周期性催化材料、VASP 和 Slurm HPC 的本地 Web 科研工作台。它把结构准备、VASP 输入、受控远程计算、结果解析和反应自由能分析放进一条可追踪的工作流，同时保留必要的科学判断和提交确认。
 
-> **当前状态：v0.27.0 Research Preview。** 已完成小规模单作业端到端流程验证，可作为“可用初版”试用；它还不是无人值守的生产级高通量平台，也不会替代研究者对结构、计算协议和结果的科学判断。
+> **当前状态：v0.33.0 Research Preview。** 已完成小规模单作业端到端流程、可编辑工作流平台初版和实验约束代表性结构建模 v1，可用于受控试算；它还不是无人值守的生产级高通量平台，也不会替代研究者对结构、计算协议和结果的科学判断。
 
 _CatEx is a local-first web workbench for traceable periodic-catalysis workflows with VASP and Slurm. The current release is a research preview validated for controlled, single-job workflows._
 
@@ -29,23 +29,27 @@ CatEx 不为“文献复现”和“原创研究”维护两套核心。研究�
 
 ```mermaid
 flowchart LR
-    A["项目与工作文件夹"] --> B["结构导入与诊断"]
-    B --> C["VASP 输入自动化"]
-    C --> D["受控 SSH / Slurm 运行"]
-    D --> E["结果与最终结构"]
-    E --> F["反应自由能分析"]
+    A["创建或选择项目"] --> B["空白画布 / 可选模板"]
+    B --> C["可编辑、可持久化 DAG"]
+    C --> D["结构与 VASP 输入"]
+    D --> E["发布不可变版本"]
+    E --> F["受控 SSH / Slurm 运行"]
+    F --> G["统一结果文档"]
+    G --> H["反应分析 / Campaign"]
 ```
 
 | 阶段 | 当前能力 |
 | --- | --- |
 | 项目 | 项目元数据、Artifact、SHA-256、来源与派生关系 |
+| 工作流 | 空白新建或可选模板、右键建节点、类型化连线、删除/重连、自动布局、节点说明、草稿、不可变发布版本和运行快照 |
 | 结构 | POSCAR/CONTCAR/CIF 导入、CIF→POSCAR、球棍模型、几何诊断 |
-| 约束 | 通过 Selective Dynamics 固定基底层或仅放开指定吸附物原子，并在应用前高亮预览 |
+| 约束与预弛豫 | 通过 Selective Dynamics 固定基底层或仅放开指定吸附物原子；可选用本机 CHGNet/FIRE 预弛豫，再交给 VASP 正式优化 |
 | VASP 输入 | 工作文件夹自动读取、逐文件替换、INCAR 表格编辑、KPOINTS 配置与一致性检查 |
 | POTCAR | 按 POSCAR 元素顺序验证脱敏元数据，在授权远端目录中受控生成并保存本地副本 |
-| Slurm | 结构化资源配置、最长时间与站点上限校验、唯一运行目录、单次提交和只读观察 |
-| 结果 | 结束原因、电子/离子收敛、能量、力、磁矩、振动频率和最终球棍结构 |
+| Slurm | 结构化资源配置、最长时间与站点上限校验、唯一运行目录、单次提交、状态观察和显式单作业取消 |
+| 结果 | OUTCAR/OSZICAR/vasprun.xml/CONTCAR/XDATCAR/体数据元数据、收敛、能量、力、磁矩、振动频率和最终球棍结构 |
 | 反应分析 | HER/OER 模板、多结果绑定、热化学校正和自由能台阶图 |
+| Campaign | 长期候选队列、设计变量、固定工作流版本和追加式科研决策日志 |
 | 交互 | 中文/English 切换、工作流节点跳转、Windows 双击启动 |
 
 ## 设计原则
@@ -78,6 +82,9 @@ python -m venv .venv
 .\.venv\Scripts\python.exe -m pip install --upgrade pip
 .\.venv\Scripts\python.exe -m pip install -e ".[web,dev]"
 
+# 可选：启用本机 CHGNet 结构预弛豫
+.\.venv\Scripts\python.exe -m pip install -e ".[mlip]"
+
 pnpm install --frozen-lockfile
 ```
 
@@ -95,22 +102,27 @@ Windows 用户可以双击仓库根目录中的：
 pnpm web:poc
 ```
 
-启动器会检查依赖、启动本地 API 和前端，并打开浏览器。使用期间保留启动窗口；按回车停止本次启动的服务。
+启动器会在需要时构建前端，启动只监听 `127.0.0.1:8765` 的一体化本地应用并打开浏览器。CatEx 使用独立端口，避免与 CatGo 或其他常见 FastAPI 开发服务的 `8000` 端口混用。使用期间保留启动窗口；按回车停止本次启动的服务。开发模式可使用 `pnpm web:dev:stack`。
 
 ## 第一次计算
 
 推荐先使用一个很小、参数明确、不会产生大量输出的测试体系：
 
-1. 创建 CatEx 项目并选择一个本地工作文件夹。
-2. 导入 POSCAR、CONTCAR 或 CIF；检查结构、成键和警告。
-3. 如需弛豫约束，启用 Selective Dynamics 并预览固定/移动原子。
-4. 导入或编辑 INCAR、KPOINTS，核对元素顺序和计算协议。
-5. 在运行中心临时导入 SSH 配置，固定主机密钥，并执行只读连接测试。
-6. 填写远端项目名、允许的远端根目录、POTCAR 库位置和结构化 Slurm 参数。
-7. 读取并确认 POTCAR 元数据；需要时生成并保存本次 POTCAR。
-8. 点击“检查完整性并进入运行中心”，修复所有阻断项。
-9. 分别确认远端准备与作业提交，随后只读观察队列和运行状态。
-10. 在“计算结果”查看收敛结论、最终结构和数值结果；在“反应分析”绑定多个中间体并绘图。
+1. 创建或选择 CatEx 项目。项目页会显示数据根目录，工作流页会显示该项目的精确保存目录。
+2. 在“工作流”直接新建空白画布，或选择优化、静态、频率、DOS、MD、CHGNet+VASP 模板作为起点；模板不是必选项。
+3. 在空白处右键搜索并创建节点；选择已有节点后从左侧添加会自动放到后面并尝试连接。连线可选择后按 Delete 删除，也可拖动端点重连。
+4. 导入 POSCAR、CONTCAR 或 CIF；检查结构、成键和警告。
+5. 如需弛豫约束，启用 Selective Dynamics 并预览固定/移动原子。
+6. 可选启用 CHGNet 预弛豫；确认它只用于准备初始几何，再运行并检查生成的新 POSCAR。
+7. 导入或编辑 INCAR、KPOINTS，核对元素顺序和计算协议。
+8. 在运行中心临时导入 SSH 配置，固定主机密钥，并执行只读连接测试。
+9. 填写远端项目名、允许的远端根目录、POTCAR 库位置和结构化 Slurm 参数。
+10. 读取并确认 POTCAR 元数据；需要时生成并保存本次 POTCAR。
+11. 点击“检查完整性并进入运行中心”，修复所有阻断项。
+12. 保存工作流草稿并发布不可变版本；创建运行快照只生成阶段计划，不会连接超算。
+13. 分别确认远端准备与作业提交，随后观察队列和运行状态；取消当前绑定作业需要单独勾选确认。
+14. 在“计算结果”查看收敛结论、最终结构和数值结果；在“反应分析”绑定多个中间体并绘图。
+15. 长期筛选可在“科研 Campaign”登记候选、设计变量和决策依据。
 
 完整操作说明见 [CatEx Workbench 使用指南](docs/WEB_POC.md)。
 
@@ -124,7 +136,7 @@ CatEx 的远端运行能力刻意受限：
 - 每次计算使用全新的唯一远端目录；已存在目录不会复用，以避免混算和覆盖；
 - POTCAR 只在已授权环境中处理，Git 仅允许保存不含原文的元数据；
 - 结果下载白名单排除 POTCAR、WAVECAR、CHGCAR 等许可或大型文件；
-- 当前没有远端删除、自动清理、取消作业、自动续算或无人值守批量提交接口。
+- 当前没有远端删除、自动清理、自动续算或无人值守批量提交接口；`scancel` 只对当前回执绑定的单个作业开放，并要求独立确认。
 
 请勿在 Issue、截图、日志或示例配置中公开真实凭据、私钥、VPN 配置、服务器地址、用户名、主机指纹或个人路径。详见 [数据与执行安全策略](docs/SECURITY_AND_DATA_POLICY.md)。
 
@@ -133,8 +145,8 @@ CatEx 的远端运行能力刻意受限：
 ```text
 apps/web/                 React + TypeScript Web Workbench
 src/catex/                结构、VASP、Slurm 与催化科学核心
-src/catex_app/            项目、Artifact 和工作流应用层
-src/catex_web/            本地 FastAPI 服务
+src/catex_app/            项目、Artifact、工作流版本、运行图与 Campaign 应用层
+src/catex_web/            本地 FastAPI 服务与版本化路由
 tests/                    Python 测试与合成夹具
 projects/                 参考案例与科研验收清单
 docs/                     设计、协议、安全和使用文档
@@ -161,6 +173,7 @@ CI 在 Python 3.12、Node.js 24 和 pnpm 11.9 环境中执行格式检查、静�
 - 周期性非均相催化和电催化；
 - VASP 5.4.4 输入/输出与 Slurm 单作业生命周期；
 - 吸附构型、选择性弛豫、振动热化学、HER/OER 自由能分析；
+- 可选 CHGNet 通用机器学习势预弛豫（只用于 VASP 初始几何，不作为 DFT 结果）；
 - 文献复现、原创研究和实验解释共用的可追踪工作流。
 
 当前不承诺：
@@ -176,7 +189,11 @@ CI 在 Python 3.12、Node.js 24 和 pnpm 11.9 环境中执行格式检查、静�
 - [项目执行计划](docs/PROJECT_EXECUTION_PLAN.md)
 - [架构决策](docs/adr/0001-platform-architecture.md)
 - [Web Workbench 架构](docs/adr/0003-web-workbench-architecture.md)
+- [工作流运行时与 Campaign ADR](docs/adr/0004-workflow-runtime-and-campaigns.md)
+- [项目优先的工作流编辑器 ADR](docs/adr/0005-project-first-workflow-studio.md)
+- [Workflow Studio 与 Campaign 使用说明](docs/WORKFLOW_STUDIO_AND_CAMPAIGNS.md)
 - [VASP 输入验证](docs/VASP_INPUT_VALIDATION.md)
+- [CHGNet 可选预弛豫](docs/CHGNET_PRE_RELAXATION.md)
 - [VASP 输出解析](docs/VASP_OUTPUT_PARSING.md)
 - [协议与 Slurm 规划](docs/PROTOCOL_AND_SLURM_DRY_RUN.md)
 - [POTCAR 脱敏元数据](docs/HPC_POTCAR_METADATA.md)
@@ -206,3 +223,36 @@ CatEx 尚未发布对应论文或正式软件版本。当前科研使用请记�
 ## 反馈
 
 欢迎通过 GitHub Issues 提交可复现的缺陷、文档问题和功能建议。请使用合成或充分脱敏的数据，不要附带真实凭据、服务器信息、POTCAR 原文或受版权限制的论文附件。
+
+## Experiment-informed atomistic models (v0.33.0)
+
+CatEx now includes a local evidence-to-model vertical slice for representative
+atomistic modeling. It accepts independently optional XRD/GIXRD, ICP, EDS,
+XPS, and TEM evidence plus a provenance-rich local CIF catalog. Common
+text/CSV tables and short conclusions are converted into reviewable ranges
+without asking the user to write metadata JSON. It returns multiple
+phase/model hypotheses, bounded structure recipes, DFT-ready representatives,
+unresolved assumptions, and affordable next-characterization suggestions.
+
+The default path is deterministic, offline, and read-only. GPT planning is an
+optional replaceable adapter; arbitrary model-generated code is never executed.
+The project-scoped Web page now supports evidence upload and extraction,
+project/OPTIMADE/Materials Project catalogs, XRD hypothesis plots, per-range
+candidate checks, and explicitly approved write-back into the normal structure
+workspace. Provider keys can be verified and stored in the operating-system
+credential manager, remain available across CatEx restarts, and are never
+stored in a project, browser storage, export, or Git. Environment variables
+remain available for automated deployments.
+
+Candidate structures have a read-only 3D inspection panel. It supports atom
+selection, element/index and coordinate inspection, element counts, cell
+lengths, and optional atom-index labels. The same viewer interaction is used in
+the structure workspace, calculation results, and experimental candidates.
+See [the scientific contract and CLI guide](docs/EXPERIMENT_INFORMED_MODELING.md)
+and the
+[synthetic Ni-Mo acceptance case](projects/nimo_experimental_modeling/README.md).
+An end-to-end literature check based on an electrodeposited Ni4Mo HER electrode
+is available in the
+[Ni–Mo HER literature benchmark](projects/nimo_her_literature_benchmark/README.md).
+The staged scientific validation and implementation roadmap is documented in
+the [Ni–Mo benchmark plan](docs/NIMO_EXPERIMENTAL_MODELING_BENCHMARK.md).

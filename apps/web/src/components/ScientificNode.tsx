@@ -1,5 +1,6 @@
 import { Handle, Position, type NodeProps } from '@xyflow/react'
 import {
+  Atom,
   Braces,
   CheckCircle2,
   CircleDot,
@@ -22,10 +23,12 @@ import {
 const categoryIcons = {
   source: FileUp,
   structure: ScanSearch,
+  experiment: Atom,
   review: ShieldCheck,
   protocol: Braces,
   execution: Play,
   parsing: Microscope,
+  calculation: FlaskConical,
 }
 
 export function ScientificNode({ data, selected }: NodeProps<ScientificFlowNode>) {

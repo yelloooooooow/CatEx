@@ -16,7 +16,10 @@ def test_web_capabilities_and_default_template(tmp_path: Path) -> None:
     assert capabilities.json()["hpc_enabled"] is True
     assert capabilities.json()["ssh_enabled"] is True
     assert capabilities.json()["hpc_default_active"] is False
-    assert capabilities.json()["credentials_persisted"] is False
+    assert capabilities.json()["credentials_persisted"] is (
+        capabilities.json()["experimental_modeling"]["credential_store"]["available"]
+        and capabilities.json()["experimental_modeling"]["credential_store"]["persistent"]
+    )
     assert capabilities.json()["project_persistence_enabled"] is True
     assert template.status_code == 200
     assert template.json()["validation"]["valid"] is True
@@ -48,6 +51,40 @@ def test_web_synthetic_vasp_metrics_match_public_contract(tmp_path: Path) -> Non
         "commands_executed": False,
         "hpc_contacted": False,
     }
+
+
+def test_web_parses_uploaded_vasp_outputs_without_retaining_them(tmp_path: Path) -> None:
+    fixture = Path(__file__).parent / "fixtures" / "synthetic" / "vasp_output" / "normal"
+    with TestClient(create_app(data_root=tmp_path)) as client:
+        response = client.post(
+            "/api/v1/vasp-output/parse",
+            files=[
+                ("files", ("OUTCAR", (fixture / "OUTCAR").read_bytes(), "text/plain")),
+                ("files", ("OSZICAR", (fixture / "OSZICAR").read_bytes(), "text/plain")),
+            ],
+        )
+
+    assert response.status_code == 200
+    payload = response.json()
+    assert payload["energy"]["sigma_zero_energy_eV"] == -10.245
+    assert payload["upload"] == {
+        "filenames": ["OUTCAR", "OSZICAR"],
+        "retained": False,
+        "hpc_contacted": False,
+    }
+    assert payload["directory"] == "browser-upload"
+    assert all(Path(item["path"]).name == item["path"] for item in payload["artifacts"])
+
+
+def test_web_rejects_non_vasp_output_uploads(tmp_path: Path) -> None:
+    with TestClient(create_app(data_root=tmp_path)) as client:
+        response = client.post(
+            "/api/v1/vasp-output/parse",
+            files={"files": ("vasprun.xml", b"not supported", "text/plain")},
+        )
+
+    assert response.status_code == 400
+    assert "OUTCAR and OSZICAR" in response.json()["detail"]
 
 
 def test_web_thermochemistry_and_oer_analysis_endpoints(tmp_path: Path) -> None:

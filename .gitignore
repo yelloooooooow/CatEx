@@ -26,6 +26,7 @@ dist/
 node_modules/
 **/node_modules/
 .pnpm-store/
+.npm-playwright-cache/
 apps/web/dist/
 *.tsbuildinfo
 
@@ -74,6 +75,8 @@ Reading-notes-code/
 **/slurm-*.out
 
 # Runtime workspaces
+/output/
+/.pytest-tmp-*/
 **/.material-studio-mcp/jobs/
 **/calculations/**
 **/logs/**

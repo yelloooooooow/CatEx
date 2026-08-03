@@ -16,7 +16,7 @@ function option(name, fallback) {
   return value ? value.slice(prefix.length) : fallback
 }
 
-const apiPort = Number(option('api-port', '8000'))
+const apiPort = Number(option('api-port', '8765'))
 const webPort = Number(option('web-port', '5173'))
 const keepAliveSeconds = Number(option('keep-alive-seconds', '0'))
 const openBrowser = !process.argv.includes('--no-browser')
@@ -71,6 +71,30 @@ function portIsAvailable(port) {
   })
 }
 
+async function compatibleWorkbenchIsRunning() {
+  try {
+    const [apiResponse, webResponse] = await Promise.all([
+      fetch(`${apiUrl}/api/v1/capabilities`, { signal: AbortSignal.timeout(1500) }),
+      fetch(webUrl, { signal: AbortSignal.timeout(1500) }),
+    ])
+    if (!apiResponse.ok || !webResponse.ok) return false
+    const capabilities = await apiResponse.json()
+    const page = await webResponse.text()
+    return Boolean(
+      capabilities?.catex_version
+      && capabilities?.chgnet?.schema_version === 'catex.chgnet-capabilities.v1'
+      && page.includes('CatEx Workbench'),
+    )
+  } catch {
+    return false
+  }
+}
+
+function openWorkbench() {
+  const browser = spawn('explorer.exe', [webUrl], { detached: true, stdio: 'ignore' })
+  browser.unref()
+}
+
 async function waitFor(url, accept, child, attempts) {
   for (let attempt = 0; attempt < attempts; attempt += 1) {
     try {
@@ -100,15 +124,23 @@ process.on('SIGINT', () => void stop(0))
 process.on('SIGTERM', () => void stop(0))
 
 try {
+  startup: {
   if (apiPort === webPort) {
     throw new Error('API and Web ports must be different.')
   }
-  if (!(await portIsAvailable(apiPort))) {
+  const apiPortAvailable = await portIsAvailable(apiPort)
+  const webPortAvailable = await portIsAvailable(webPort)
+  if (!apiPortAvailable && !webPortAvailable && await compatibleWorkbenchIsRunning()) {
+    process.stdout.write(`CatEx is already running at ${webUrl}; reusing the healthy local session.\n`)
+    if (openBrowser) openWorkbench()
+    break startup
+  }
+  if (!apiPortAvailable) {
     throw new Error(
       `API port ${apiPort} is already in use. Stop the previous CatEx process or choose --api-port=<free-port>.`,
     )
   }
-  if (!(await portIsAvailable(webPort))) {
+  if (!webPortAvailable) {
     throw new Error(
       `Web port ${webPort} is already in use. Stop the previous CatEx process or choose --web-port=<free-port>.`,
     )
@@ -145,10 +177,7 @@ try {
   process.stdout.write('      Web workbench ready.\n')
 
   process.stdout.write(`[3/3] CatEx is running at ${webUrl}\n`)
-  if (openBrowser) {
-    const browser = spawn('explorer.exe', [webUrl], { detached: true, stdio: 'ignore' })
-    browser.unref()
-  }
+  if (openBrowser) openWorkbench()
 
   process.stdout.write('\nKeep this window open while using CatEx.\n')
   if (keepAliveSeconds > 0) {
@@ -157,6 +186,7 @@ try {
     process.stdout.write('Press Enter here to stop CatEx.\n')
     process.stdin.resume()
     process.stdin.once('data', () => void stop(0))
+  }
   }
 } catch (error) {
   process.stderr.write(`\nCatEx could not start: ${error.message}\n`)

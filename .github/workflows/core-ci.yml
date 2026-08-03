@@ -75,7 +75,13 @@ jobs:
         run: pnpm web:check
 
       - name: Check Windows launcher syntax
-        run: node --check scripts/start_web_poc.mjs
+        run: |
+          node --check scripts/local_workbench_probe.mjs
+          node --check scripts/start_catex.mjs
+          node --check scripts/start_web_poc.mjs
+
+      - name: Test direct localhost readiness probe
+        run: node --test scripts/local_workbench_probe.test.mjs
 
       - name: Test frontend
         run: pnpm web:test

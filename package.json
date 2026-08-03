@@ -4,10 +4,14 @@
   "license": "BSD-3-Clause",
   "packageManager": "pnpm@11.9.0",
   "scripts": {
-    "web:poc": "node scripts/start_web_poc.mjs",
+    "web:poc": "node scripts/start_catex.mjs",
+    "web:dev:stack": "node scripts/start_web_poc.mjs",
     "web:dev": "pnpm --dir apps/web dev",
     "web:build": "pnpm --dir apps/web build",
     "web:test": "pnpm --dir apps/web test",
-    "web:check": "pnpm --dir apps/web check"
+    "web:check": "pnpm --dir apps/web check",
+    "launcher:test": "node --test scripts/local_workbench_probe.test.mjs",
+    "release:check": "pnpm launcher:test && pnpm web:check && pnpm web:test && pnpm web:build",
+    "release:build": "pnpm release:check && python -m build"
   }
 }

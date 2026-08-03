@@ -10,10 +10,12 @@ from catex_app.services import (
     parse_demo_vasp_output,
 )
 from catex_app.workflow import (
+    NODE_REGISTRY,
     PortKind,
     WorkflowEdge,
     default_workflow_template,
     validate_workflow,
+    workflow_template_catalog,
 )
 
 FIXTURES = Path(__file__).parent / "fixtures" / "synthetic"
@@ -25,9 +27,30 @@ def test_default_workflow_is_typed_and_valid() -> None:
     report = validate_workflow(template.nodes, template.edges)
 
     assert report.valid
-    assert template.nodes[0].type_id == "structure.upload"
+    assert template.nodes[0].type_id == "hpc.connect"
     assert template.nodes[-1].type_id == "results.summarize"
+    assert {node.type_id for node in template.nodes}.isdisjoint(
+        {"structure.upload", "structure.inspect"}
+    )
     assert PortKind.STRUCTURE_ARTIFACT.value == "structure_artifact"
+
+
+def test_experiment_to_dft_template_is_typed_and_review_gated() -> None:
+    template = workflow_template_catalog()[0]
+
+    report = validate_workflow(template.nodes, template.edges)
+
+    assert template.template_id == "experiment-to-dft"
+    assert report.valid
+    assert [node.type_id for node in template.nodes[:4]] == [
+        "experiment.evidence.prepare",
+        "structure.catalog.prepare",
+        "experiment.model.infer",
+        "review.candidate_models",
+    ]
+    assert NODE_REGISTRY["review.candidate_models"].review_gate
+    assert NODE_REGISTRY["vasp.input.prepare"].inputs[0].kind is PortKind.REVIEWED_MODEL_SET
+    assert not NODE_REGISTRY["vasp.input.prepare"].inputs[0].required
 
 
 def test_workflow_rejects_type_mismatch() -> None:
@@ -35,8 +58,8 @@ def test_workflow_rejects_type_mismatch() -> None:
     invalid = WorkflowEdge(
         edge_id="bad-edge",
         source_node_id="node-1",
-        source_port_id="structure",
-        target_node_id="node-5",
+        source_port_id="context",
+        target_node_id="node-3",
         target_port_id="input",
     )
 

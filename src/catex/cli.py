@@ -8,6 +8,23 @@ from collections.abc import Sequence
 from pathlib import Path
 from typing import Any
 
+from catex.experimental import (
+    CandidateMaterializationReport,
+    ExperimentalModelingReport,
+    GPTCandidatePlanner,
+    InferenceStatus,
+    OpenAIResponsesTransport,
+    OptimadeCatalogFetchReport,
+    ProviderRegistry,
+    RuleCandidatePlanner,
+    XRDSearchSettings,
+    fetch_optimade_structures,
+    infer_experimental_models,
+    load_experiment_spec,
+    load_local_structure_catalog,
+    materialize_provider_catalog,
+    materialize_representative_models,
+)
 from catex.hpc import (
     PotcarMetadataExtractionReport,
     RestartAssessment,
@@ -59,6 +76,9 @@ Report = (
     | SlurmSnapshotReport
     | RestartAssessment
     | RunBindingReport
+    | ExperimentalModelingReport
+    | CandidateMaterializationReport
+    | OptimadeCatalogFetchReport
 )
 
 
@@ -206,11 +226,67 @@ def _parser() -> argparse.ArgumentParser:
     job_parser.add_argument("--cluster-policy", required=True)
     job_parser.add_argument("--destination-root", required=True)
     job_parser.add_argument("--format", choices=("text", "json"), default="text")
+
+    for command, help_text in (
+        (
+            "infer-experimental-models",
+            "Infer reviewable representative models without writing structures.",
+        ),
+        (
+            "materialize-experimental-models",
+            "Infer and write representative POSCAR/CIF files into one new directory.",
+        ),
+    ):
+        experimental_parser = subparsers.add_parser(command, help=help_text)
+        experimental_parser.add_argument("spec")
+        experimental_parser.add_argument("--catalog", required=True)
+        experimental_parser.add_argument(
+            "--planner",
+            choices=("rule", "gpt"),
+            default="rule",
+        )
+        experimental_parser.add_argument(
+            "--model",
+            help="Explicit OpenAI model ID; required only with --planner gpt.",
+        )
+        experimental_parser.add_argument(
+            "--baseline-window-points",
+            type=int,
+            default=0,
+        )
+        experimental_parser.add_argument(
+            "--maximum-representatives",
+            type=int,
+            default=10,
+        )
+        experimental_parser.add_argument(
+            "--format",
+            choices=("text", "json"),
+            default="text",
+        )
+        if command == "materialize-experimental-models":
+            experimental_parser.add_argument("--destination", required=True)
+
+    optimade_parser = subparsers.add_parser(
+        "fetch-optimade-catalog",
+        help="Explicitly fetch ordered structures and cache a local offline catalog.",
+    )
+    optimade_parser.add_argument("base_url")
+    optimade_parser.add_argument("--provider-id", required=True)
+    optimade_parser.add_argument("--element", action="append", required=True)
+    optimade_parser.add_argument("--destination", required=True)
+    optimade_parser.add_argument("--maximum-results", type=int, default=100)
+    optimade_parser.add_argument("--maximum-pages", type=int, default=5)
+    optimade_parser.add_argument("--license", default="")
+    optimade_parser.add_argument("--citation", default="")
+    optimade_parser.add_argument("--format", choices=("text", "json"), default="text")
     return parser
 
 
 def _render_json(report: Report) -> str:
-    return json.dumps(report.to_dict(), indent=2, ensure_ascii=False, sort_keys=True)
+    # ASCII-safe JSON remains valid when a Windows console still uses a legacy
+    # code page; scientific symbols are preserved as standard JSON escapes.
+    return json.dumps(report.to_dict(), indent=2, ensure_ascii=True, sort_keys=True)
 
 
 def _diagnostics_text(report: Report) -> list[str]:
@@ -466,6 +542,63 @@ def _render_run_binding_text(report: RunBindingReport) -> str:
     return "\n".join(lines)
 
 
+def _render_experimental_modeling_text(report: ExperimentalModelingReport) -> str:
+    lines = [
+        f"status: {report.status.value}",
+        f"claim_ceiling: {report.claim_ceiling.value}",
+        f"sample_id: {report.experiment.sample_id}",
+        f"planner: {report.candidate_plan.planner}",
+        f"phase_search_status: {report.phase_search.status if report.phase_search else 'not_run'}",
+        f"candidates: {len(report.candidate_assessments)}",
+        f"representatives: {len(report.representative_candidate_ids)}",
+        f"external_api_called: {str(report.external_api_called).lower()}",
+        "writes_performed: false",
+    ]
+    lines.extend(
+        f"representative_candidate_id: {item}" for item in report.representative_candidate_ids
+    )
+    lines.extend(f"ambiguity: {item}" for item in report.ambiguity_reasons)
+    lines.extend(
+        f"recommended_next_experiment: {item}" for item in report.recommended_next_experiments
+    )
+    lines.extend(_diagnostics_text(report))
+    return "\n".join(lines)
+
+
+def _render_candidate_materialization_text(
+    report: CandidateMaterializationReport,
+) -> str:
+    lines = [
+        "status: materialized",
+        f"inference_sha256: {report.inference_sha256}",
+        f"destination: {report.destination}",
+        f"candidates: {len(report.candidates)}",
+        "scientific_review_required: true",
+        "writes_performed: true",
+    ]
+    lines.extend(f"candidate_id: {item.candidate_id}" for item in report.candidates)
+    return "\n".join(lines)
+
+
+def _render_optimade_catalog_fetch_text(report: OptimadeCatalogFetchReport) -> str:
+    fetch = report.fetch
+    materialization = report.materialization
+    lines = [
+        "status: materialized",
+        f"provider_id: {fetch.provider_id}",
+        f"base_url: {fetch.base_url}",
+        f"required_elements: {' '.join(fetch.required_elements)}",
+        f"received_records: {fetch.received_records}",
+        f"accepted_records: {fetch.accepted_records}",
+        f"destination: {materialization.destination}",
+        f"catalog_sha256: {materialization.catalog.sha256}",
+        "network_read_performed: true",
+        "writes_performed: true",
+    ]
+    lines.extend(_diagnostics_text(report))
+    return "\n".join(lines)
+
+
 def _emit(report: Report, output_format: str) -> None:
     if output_format == "json":
         print(_render_json(report))
@@ -493,6 +626,12 @@ def _emit(report: Report, output_format: str) -> None:
         print(_render_restart_assessment_text(report))
     elif isinstance(report, RunBindingReport):
         print(_render_run_binding_text(report))
+    elif isinstance(report, ExperimentalModelingReport):
+        print(_render_experimental_modeling_text(report))
+    elif isinstance(report, CandidateMaterializationReport):
+        print(_render_candidate_materialization_text(report))
+    elif isinstance(report, OptimadeCatalogFetchReport):
+        print(_render_optimade_catalog_fetch_text(report))
     else:
         print(_render_ms_plan_text(report))
 
@@ -506,12 +645,38 @@ def _comparison_settings(arguments: Any) -> ComparisonSettings:
     )
 
 
+def _experimental_planner(arguments: Any) -> RuleCandidatePlanner | GPTCandidatePlanner:
+    if arguments.planner == "rule":
+        if arguments.model:
+            raise ValueError("--model is only valid with --planner gpt")
+        return RuleCandidatePlanner()
+    if not arguments.model:
+        raise ValueError("--model is required with --planner gpt")
+    return GPTCandidatePlanner(OpenAIResponsesTransport(model=arguments.model))
+
+
 def main(argv: Sequence[str] | None = None) -> int:
     """Run the CLI and return a process exit code."""
 
     parser = _parser()
     arguments = parser.parse_args(argv)
     try:
+        if arguments.command == "fetch-optimade-catalog":
+            fetched = fetch_optimade_structures(
+                base_url=arguments.base_url,
+                provider_id=arguments.provider_id,
+                required_elements=arguments.element,
+                maximum_results=arguments.maximum_results,
+                maximum_pages=arguments.maximum_pages,
+                license=arguments.license,
+                citation=arguments.citation,
+            )
+            report = OptimadeCatalogFetchReport(
+                fetched.report,
+                materialize_provider_catalog(fetched.provider, arguments.destination),
+            )
+            _emit(report, arguments.format)
+            return 0
         if arguments.command == "inspect-structure":
             report = inspect_path(arguments.path)
             _emit(report, arguments.format)
@@ -625,6 +790,31 @@ def main(argv: Sequence[str] | None = None) -> int:
             )
             _emit(report, arguments.format)
             return 1 if report.has_errors else 0
+        if arguments.command in {
+            "infer-experimental-models",
+            "materialize-experimental-models",
+        }:
+            experiment = load_experiment_spec(arguments.spec)
+            catalog = load_local_structure_catalog(arguments.catalog)
+            registry = ProviderRegistry((catalog,))
+            run = infer_experimental_models(
+                experiment,
+                registry,
+                _experimental_planner(arguments),
+                xrd_settings=XRDSearchSettings(
+                    baseline_window_points=arguments.baseline_window_points,
+                ),
+                maximum_representatives=arguments.maximum_representatives,
+            )
+            if arguments.command == "infer-experimental-models":
+                _emit(run.report, arguments.format)
+                return 0 if run.report.status is InferenceStatus.READY_FOR_REVIEW else 1
+            materialized = materialize_representative_models(
+                run,
+                arguments.destination,
+            )
+            _emit(materialized, arguments.format)
+            return 0
     except (OSError, ValueError) as exc:
         parser.error(str(exc))
     return 2

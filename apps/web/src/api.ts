@@ -3,8 +3,25 @@ import type {
   CalculationConfig,
   CalculationResult,
   CalculationPlanResponse,
+  CampaignCandidate,
+  CampaignDecision,
+  CampaignRecord,
+  ChgnetPreRelaxationConfig,
+  ChgnetPreRelaxationResponse,
   CifConversionResponse,
   EnergyDerivation,
+  ExperimentalCandidateReview,
+  ExperimentalCatalogSnapshot,
+  ExperimentalCredentialMutation,
+  ExperimentalEvidenceArtifact,
+  ExperimentalEvidenceExtraction,
+  ExperimentalMaterialization,
+  ExperimentalModelingCapabilities,
+  ExperimentalModelingRun,
+  ExperimentalRunSummary,
+  ExperimentalSpec,
+  ExperimentalSpecRevision,
+  HpcCancellationReceipt,
   HpcObservation,
   HpcProfile,
   HarmonicThermochemistry,
@@ -27,15 +44,38 @@ import type {
   StructureReview,
   TemplateResponse,
   VaspDemoResult,
+  VaspResultDocument,
   WorkflowValidation,
+  WorkflowDraft,
+  WorkflowExecutionPlan,
+  WorkflowRevision,
+  WorkflowRunGraph,
+  WorkflowTemplateCatalogItem,
 } from './types'
 import type { WorkflowValidationRequest } from './workflow'
+
+export class ApiError extends Error {
+  readonly status: number
+
+  constructor(message: string, status: number) {
+    super(message)
+    this.name = 'ApiError'
+    this.status = status
+  }
+}
 
 async function requestJson<T>(url: string, init?: RequestInit): Promise<T> {
   const response = await fetch(url, init)
   if (!response.ok) {
     const detail = await response.json().catch(() => null)
-    throw new Error(detail?.detail ?? `Request failed (${response.status})`)
+    const value = detail?.detail
+    const message =
+      typeof value === 'string'
+        ? value
+        : typeof value?.message === 'string'
+          ? value.message
+          : `Request failed (${response.status})`
+    throw new ApiError(message, response.status)
   }
   return response.json() as Promise<T>
 }
@@ -48,6 +88,12 @@ export const api = {
   },
   defaultTemplate: () =>
     requestJson<TemplateResponse>('/api/v1/workflows/templates/default'),
+  workflowTemplates: async () => {
+    const payload = await requestJson<{ templates: WorkflowTemplateCatalogItem[] }>(
+      '/api/v1/workflows/templates',
+    )
+    return payload.templates
+  },
   validateWorkflow: (payload: WorkflowValidationRequest) =>
     requestJson<WorkflowValidation>('/api/v1/workflows/validate', {
       method: 'POST',
@@ -80,6 +126,22 @@ export const api = {
       headers: { 'content-type': 'application/json' },
       body: JSON.stringify(payload),
     }),
+  parseVaspOutputFiles: (files: File[]) => {
+    const form = new FormData()
+    for (const file of files) form.append('files', file)
+    return requestJson<VaspDemoResult>('/api/v1/vasp-output/parse', {
+      method: 'POST',
+      body: form,
+    })
+  },
+  parseVaspResultFiles: (files: File[]) => {
+    const form = new FormData()
+    for (const file of files) form.append('files', file)
+    return requestJson<VaspResultDocument>('/api/v1/vasp-results/parse', {
+      method: 'POST',
+      body: form,
+    })
+  },
   projects: async () => {
     const payload = await requestJson<{ projects: ProjectRecord[] }>('/api/v1/projects')
     return payload.projects
@@ -118,6 +180,213 @@ export const api = {
       body: form,
     })
   },
+  experimentalModelingCapabilities: () =>
+    requestJson<ExperimentalModelingCapabilities>(
+      '/api/v1/experimental-modeling/capabilities',
+    ),
+  saveExperimentalCredential: (
+    provider: 'materials_project' | 'openai',
+    secret: string,
+  ) =>
+    requestJson<ExperimentalCredentialMutation>(
+      `/api/v1/experimental-modeling/credentials/${provider}`,
+      {
+        method: 'PUT',
+        headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({ secret }),
+      },
+    ),
+  deleteExperimentalCredential: (
+    provider: 'materials_project' | 'openai',
+  ) =>
+    requestJson<ExperimentalCredentialMutation>(
+      `/api/v1/experimental-modeling/credentials/${provider}`,
+      { method: 'DELETE' },
+    ),
+  experimentalEvidence: async (projectId: string) => {
+    const payload = await requestJson<{ evidence: ExperimentalEvidenceArtifact[] }>(
+      `/api/v1/projects/${projectId}/experimental-modeling/evidence`,
+    )
+    return payload.evidence
+  },
+  addExperimentalEvidence: (projectId: string, file: File) => {
+    const form = new FormData()
+    form.append('file', file)
+    return requestJson<ExperimentalEvidenceArtifact>(
+      `/api/v1/projects/${projectId}/experimental-modeling/evidence`,
+      { method: 'POST', body: form },
+    )
+  },
+  extractExperimentalEvidence: (
+    projectId: string,
+    payload: {
+      evidence_id: string
+      evidence_artifact_id?: string
+      kind: 'xrd' | 'gixrd' | 'icp' | 'eds' | 'xps' | 'tem'
+      conclusion: string
+      instrument_info: string
+    },
+  ) => requestJson<ExperimentalEvidenceExtraction>(
+    `/api/v1/projects/${projectId}/experimental-modeling/evidence/extract`,
+    {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify(payload),
+    },
+  ),
+  experimentalSpec: async (projectId: string) => {
+    const payload = await requestJson<{ revision: ExperimentalSpecRevision | null }>(
+      `/api/v1/projects/${projectId}/experimental-modeling/spec`,
+    )
+    return payload.revision
+  },
+  saveExperimentalSpec: (projectId: string, payload: ExperimentalSpec) =>
+    requestJson<ExperimentalSpecRevision>(
+      `/api/v1/projects/${projectId}/experimental-modeling/spec`,
+      {
+        method: 'PUT',
+        headers: { 'content-type': 'application/json' },
+        body: JSON.stringify(payload),
+      },
+    ),
+  experimentalCatalogs: async (projectId: string) => {
+    const payload = await requestJson<{ catalogs: ExperimentalCatalogSnapshot[] }>(
+      `/api/v1/projects/${projectId}/experimental-modeling/catalogs`,
+    )
+    return payload.catalogs
+  },
+  fetchOptimadeCatalog: (
+    projectId: string,
+    payload: {
+      base_url: string
+      provider_id: string
+      required_elements: string[]
+      maximum_results: number
+      maximum_pages: number
+      license?: string
+      citation?: string
+    },
+  ) =>
+    requestJson<ExperimentalCatalogSnapshot>(
+      `/api/v1/projects/${projectId}/experimental-modeling/providers/optimade/search`,
+      {
+        method: 'POST',
+        headers: { 'content-type': 'application/json' },
+        body: JSON.stringify(payload),
+      },
+    ),
+  fetchMaterialsProjectCatalog: (
+    projectId: string,
+    payload: { required_elements: string[]; maximum_results: number },
+  ) =>
+    requestJson<ExperimentalCatalogSnapshot>(
+      `/api/v1/projects/${projectId}/experimental-modeling/providers/materials-project/search`,
+      {
+        method: 'POST',
+        headers: { 'content-type': 'application/json' },
+        body: JSON.stringify(payload),
+      },
+    ),
+  experimentalRuns: async (projectId: string) => {
+    const payload = await requestJson<{ runs: ExperimentalRunSummary[] }>(
+      `/api/v1/projects/${projectId}/experimental-modeling/runs`,
+    )
+    return payload.runs
+  },
+  createExperimentalRun: (
+    projectId: string,
+    payload: {
+      planner_kind: 'rule' | 'gpt'
+      catalog_ids: string[]
+      maximum_representatives: number
+      xrd_settings: {
+        wavelength: string
+        shift_values_degrees: number[]
+        fwhm_values_degrees: number[]
+        baseline_window_points: number
+        peak_relative_threshold: number
+        peak_tolerance_degrees: number
+        single_phase_pool: number
+        maximum_phases: number
+        complexity_penalty: number
+        minimum_supported_score: number
+        ambiguity_margin: number
+      }
+    },
+  ) =>
+    requestJson<ExperimentalModelingRun>(
+      `/api/v1/projects/${projectId}/experimental-modeling/runs`,
+      {
+        method: 'POST',
+        headers: { 'content-type': 'application/json' },
+        body: JSON.stringify(payload),
+      },
+    ),
+  experimentalRun: (projectId: string, runId: string) =>
+    requestJson<ExperimentalModelingRun>(
+      `/api/v1/projects/${projectId}/experimental-modeling/runs/${runId}`,
+    ),
+  experimentalReviews: async (projectId: string, runId: string) => {
+    const payload = await requestJson<{ reviews: ExperimentalCandidateReview[] }>(
+      `/api/v1/projects/${projectId}/experimental-modeling/runs/${runId}/reviews`,
+    )
+    return payload.reviews
+  },
+  reviewExperimentalCandidates: (
+    projectId: string,
+    runId: string,
+    payload: {
+      approved_candidate_ids: string[]
+      reviewer: string
+      note: string
+    },
+  ) =>
+    requestJson<ExperimentalCandidateReview>(
+      `/api/v1/projects/${projectId}/experimental-modeling/runs/${runId}/reviews`,
+      {
+        method: 'POST',
+        headers: { 'content-type': 'application/json' },
+        body: JSON.stringify(payload),
+      },
+    ),
+  materializeExperimentalCandidates: (
+    projectId: string,
+    runId: string,
+    payload: {
+      candidate_ids: string[]
+      confirm_report_sha256: string
+      approved_write: true
+    },
+  ) =>
+    requestJson<ExperimentalMaterialization>(
+      `/api/v1/projects/${projectId}/experimental-modeling/runs/${runId}/materializations`,
+      {
+        method: 'POST',
+        headers: { 'content-type': 'application/json' },
+        body: JSON.stringify(payload),
+      },
+    ),
+  runChgnetPreRelaxation: (
+    projectId: string,
+    artifactId: string,
+    config: ChgnetPreRelaxationConfig,
+  ) =>
+    requestJson<ChgnetPreRelaxationResponse>(
+      `/api/v1/projects/${projectId}/chgnet-pre-relaxations`,
+      {
+        method: 'POST',
+        headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({
+          artifact_id: artifactId,
+          model_name: config.model_name,
+          optimizer: config.optimizer,
+          fmax_eV_per_angstrom: config.fmax_eV_per_angstrom,
+          max_steps: config.max_steps,
+          relax_cell: config.relax_cell,
+          device: config.device,
+        }),
+      },
+    ),
   projectStructureReview: async (projectId: string, artifactId: string) => {
     const payload = await requestJson<{ review: StructureReview | null }>(
       `/api/v1/projects/${projectId}/structure-reviews/${artifactId}`,
@@ -149,6 +418,134 @@ export const api = {
   saveProjectWorkflow: (projectId: string, payload: WorkflowValidationRequest) =>
     requestJson<{ workflow: SavedWorkflowPayload; validation: WorkflowValidation }>(
       `/api/v1/projects/${projectId}/workflow`,
+      {
+        method: 'POST',
+        headers: { 'content-type': 'application/json' },
+        body: JSON.stringify(payload),
+      },
+    ),
+  projectWorkflowDraft: async (projectId: string) => {
+    const payload = await requestJson<{ draft: WorkflowDraft | null }>(
+      `/api/v1/projects/${projectId}/workflow/draft`,
+    )
+    return payload.draft
+  },
+  saveProjectWorkflowDraft: (
+    projectId: string,
+    payload: WorkflowValidationRequest,
+    expectedDraftSha256?: string,
+  ) =>
+    requestJson<{ draft: WorkflowDraft; validation: WorkflowValidation }>(
+      `/api/v1/projects/${projectId}/workflow/draft`,
+      {
+        method: 'PUT',
+        headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({
+          ...payload,
+          ...(expectedDraftSha256
+            ? { expected_draft_sha256: expectedDraftSha256 }
+            : {}),
+        }),
+      },
+    ),
+  workflowRevisions: async (projectId: string) => {
+    const payload = await requestJson<{ revisions: WorkflowRevision[] }>(
+      `/api/v1/projects/${projectId}/workflow/revisions`,
+    )
+    return payload.revisions
+  },
+  publishWorkflowRevision: (projectId: string, title: string, note = '') =>
+    requestJson<{ revision: WorkflowRevision; validation: WorkflowValidation }>(
+      `/api/v1/projects/${projectId}/workflow/revisions`,
+      {
+        method: 'POST',
+        headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({ title, note }),
+      },
+    ),
+  workflowRunGraphs: async (projectId: string) => {
+    const payload = await requestJson<{ run_graphs: WorkflowRunGraph[] }>(
+      `/api/v1/projects/${projectId}/workflow/run-graphs`,
+    )
+    return payload.run_graphs
+  },
+  createWorkflowRunGraph: (
+    projectId: string,
+    revisionId: string,
+    label: string,
+  ) =>
+    requestJson<WorkflowRunGraph>(
+      `/api/v1/projects/${projectId}/workflow/run-graphs`,
+      {
+        method: 'POST',
+        headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({
+          revision_id: revisionId,
+          label,
+          bindings: {},
+        }),
+      },
+    ),
+  workflowExecutionPlan: async (projectId: string, runGraphId: string) => {
+    const payload = await requestJson<{ plan: WorkflowExecutionPlan }>(
+      `/api/v1/projects/${projectId}/workflow/run-graphs/${runGraphId}/execution-plan`,
+    )
+    return payload.plan
+  },
+  campaigns: async (projectId: string) => {
+    const payload = await requestJson<{ campaigns: CampaignRecord[] }>(
+      `/api/v1/projects/${projectId}/campaigns`,
+    )
+    return payload.campaigns
+  },
+  createCampaign: (
+    projectId: string,
+    payload: {
+      title: string
+      objective: string
+      workflow_revision_id?: string
+    },
+  ) =>
+    requestJson<CampaignRecord>(`/api/v1/projects/${projectId}/campaigns`, {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify(payload),
+    }),
+  campaignDetail: (projectId: string, campaignId: string) =>
+    requestJson<{
+      campaign: CampaignRecord
+      candidates: CampaignCandidate[]
+      decisions: CampaignDecision[]
+    }>(`/api/v1/projects/${projectId}/campaigns/${campaignId}`),
+  addCampaignCandidate: (
+    projectId: string,
+    campaignId: string,
+    payload: {
+      label: string
+      structure_artifact_id?: string
+      variables: Record<string, unknown>
+    },
+  ) =>
+    requestJson<CampaignCandidate>(
+      `/api/v1/projects/${projectId}/campaigns/${campaignId}/candidates`,
+      {
+        method: 'POST',
+        headers: { 'content-type': 'application/json' },
+        body: JSON.stringify(payload),
+      },
+    ),
+  recordCampaignDecision: (
+    projectId: string,
+    campaignId: string,
+    payload: {
+      action: string
+      rationale: string
+      candidate_id?: string
+      evidence?: Record<string, unknown>
+    },
+  ) =>
+    requestJson<CampaignDecision>(
+      `/api/v1/projects/${projectId}/campaigns/${campaignId}/decisions`,
       {
         method: 'POST',
         headers: { 'content-type': 'application/json' },
@@ -276,6 +673,24 @@ export const api = {
       headers: { 'content-type': 'application/json' },
       body: JSON.stringify({ profile, run_id: runId }),
     }),
+  cancelRemoteRun: (
+    projectId: string,
+    profile: HpcProfile,
+    runId: string,
+    approvedCancel: boolean,
+  ) =>
+    requestJson<HpcCancellationReceipt>(
+      `/api/v1/projects/${projectId}/remote-cancel`,
+      {
+        method: 'POST',
+        headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({
+          profile,
+          run_id: runId,
+          approved_cancel: approvedCancel,
+        }),
+      },
+    ),
   pullRemoteResults: (
     projectId: string,
     profile: HpcProfile,

@@ -1,14 +1,9 @@
 import {
-  Background,
-  Controls,
   MarkerType,
-  MiniMap,
-  ReactFlow,
   addEdge,
   useEdgesState,
   useNodesState,
   type Connection,
-  type NodeTypes,
 } from '@xyflow/react'
 import {
   Activity,
@@ -19,6 +14,7 @@ import {
   ChevronDown,
   ChevronRight,
   ChartNoAxesCombined,
+  Copy,
   Database,
   FileCheck2,
   FileUp,
@@ -33,12 +29,12 @@ import {
   LockKeyhole,
   Languages,
   MousePointer2,
+  Microscope,
   Download,
   Settings2,
   Server,
   Play,
   RefreshCw,
-  RotateCcw,
   Save,
   ServerOff,
   ShieldCheck,
@@ -48,9 +44,14 @@ import {
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 
 import { api } from './api'
+import { CampaignWorkbench } from './components/CampaignWorkbench'
+import { ExperimentalModelingWorkbench } from './components/ExperimentalModelingWorkbench'
 import { FreeEnergyDiagram } from './components/FreeEnergyDiagram'
-import { ScientificNode } from './components/ScientificNode'
 import { StructureViewer } from './components/StructureViewer'
+import {
+  localizeWorkflowTemplate,
+  WorkflowWorkbench,
+} from './components/WorkflowStudio'
 import { localizeNodeDefinition, useI18n } from './i18n'
 import {
   canResumeExistingRun,
@@ -74,6 +75,8 @@ import type {
   CalculationConfig,
   CalculationResult,
   CalculationPlanResponse,
+  ChgnetPreRelaxationConfig,
+  ChgnetPreRelaxationResponse,
   Diagnostic,
   EnergyDerivation,
   HpcObservation,
@@ -94,10 +97,14 @@ import type {
   StructureInspectionResponse,
   TemplateResponse,
   VaspDemoResult,
+  WorkflowRevision,
+  WorkflowRunGraph,
+  WorkflowTemplateCatalogItem,
 } from './types'
 import {
   buildValidationRequest,
   compatibleHandles,
+  localProjectDirectory,
   rehydrateNodes,
   templateEdgeToFlow,
   templateNodeToFlow,
@@ -114,7 +121,6 @@ import {
 import '@xyflow/react/dist/style.css'
 import './styles.css'
 
-const nodeTypes: NodeTypes = { scientific: ScientificNode }
 const STORAGE_KEY = 'catex.web-poc.workflow.v2'
 const ACTIVE_STRUCTURE_STORAGE_PREFIX = 'catex.web-poc.active-structure.'
 const REVIEW_NOTE_ZH = '已核对结构、协议、POTCAR 元数据与资源配置。'
@@ -137,7 +143,16 @@ Direct
 0.500000 0.500000 0.500000 Cl
 `
 
-type WorkspaceView = 'projects' | 'workflow' | 'structure' | 'protocol' | 'runs' | 'results' | 'analysis'
+type WorkspaceView =
+  | 'projects'
+  | 'experimental'
+  | 'workflow'
+  | 'structure'
+  | 'protocol'
+  | 'runs'
+  | 'results'
+  | 'analysis'
+  | 'campaigns'
 type NoticeTone = 'neutral' | 'success' | 'warning' | 'error'
 
 interface Notice {
@@ -149,6 +164,15 @@ interface SavedWorkflow {
   schema_version: 'catex.web-local-workflow.v1'
   nodes: ScientificFlowNode[]
   edges: ScientificFlowEdge[]
+}
+
+interface ReactionOutputImport {
+  filenames: string[]
+  energyKind: 'sigma_zero' | 'without_entropy' | 'free_energy'
+  energyEv: number
+  status: string
+  scientificallyComplete: boolean
+  ionicConvergence: string
 }
 
 type InputFileKey = 'poscar' | 'incar' | 'kpoints' | 'potcar' | 'slurm'
@@ -167,6 +191,10 @@ interface WorkspaceDirectoryHandle {
 }
 
 const NODE_VIEW: Record<string, WorkspaceView> = {
+  'experiment.evidence.prepare': 'experimental',
+  'structure.catalog.prepare': 'experimental',
+  'experiment.model.infer': 'experimental',
+  'review.candidate_models': 'experimental',
   'structure.upload': 'structure',
   'structure.inspect': 'structure',
   'hpc.connect': 'runs',
@@ -177,6 +205,28 @@ const NODE_VIEW: Record<string, WorkspaceView> = {
   'execution.mock': 'runs',
   'vasp.parse': 'results',
   'results.summarize': 'results',
+  'vasp.input.prepare': 'protocol',
+  'mlip.chgnet.relax': 'structure',
+  'vasp.relax': 'protocol',
+  'vasp.static': 'protocol',
+  'vasp.frequency': 'protocol',
+  'vasp.dos': 'protocol',
+  'vasp.md': 'protocol',
+  'results.collect': 'results',
+}
+
+const LEGACY_STRUCTURE_WORKFLOW_NODES = new Set(['structure.upload', 'structure.inspect'])
+
+function hasLegacyStructureWorkflowNodes(nodes: Array<{ data?: { definition?: { type_id?: string } }; type_id?: string }>): boolean {
+  return nodes.some((node) => LEGACY_STRUCTURE_WORKFLOW_NODES.has(
+    node.type_id ?? node.data?.definition?.type_id ?? '',
+  ))
+}
+
+function withoutRecordKey<T>(record: Record<string, T>, key: string): Record<string, T> {
+  const next = { ...record }
+  delete next[key]
+  return next
 }
 
 function serializeIncar(config: CalculationConfig | null): string {
@@ -261,12 +311,14 @@ const navItems: Array<{
   icon: typeof GitBranch
 }> = [
   { id: 'projects', labelZh: '项目', labelEn: 'Projects', shortLabelZh: '项', shortLabelEn: 'P', icon: FolderOpen },
+  { id: 'experimental', labelZh: '实验建模', labelEn: 'Experimental Models', shortLabelZh: '实', shortLabelEn: 'X', icon: Microscope },
   { id: 'workflow', labelZh: '工作流', labelEn: 'Workflow', shortLabelZh: '流', shortLabelEn: 'W', icon: GitBranch },
   { id: 'structure', labelZh: '结构工作台', labelEn: 'Structures', shortLabelZh: '构', shortLabelEn: 'S', icon: Atom },
   { id: 'protocol', labelZh: '协议与输入', labelEn: 'VASP Inputs', shortLabelZh: '议', shortLabelEn: 'V', icon: Settings2 },
   { id: 'runs', labelZh: '运行中心', labelEn: 'Run Center', shortLabelZh: '运', shortLabelEn: 'R', icon: Server },
   { id: 'results', labelZh: '计算结果', labelEn: 'Results', shortLabelZh: '果', shortLabelEn: 'E', icon: Gauge },
   { id: 'analysis', labelZh: '反应分析', labelEn: 'Reaction Analysis', shortLabelZh: '析', shortLabelEn: 'A', icon: ChartNoAxesCombined },
+  { id: 'campaigns', labelZh: '科研 Campaign', labelEn: 'Campaigns', shortLabelZh: '筛', shortLabelEn: 'C', icon: Database },
 ]
 
 function formatNumber(value: number | null | undefined, digits = 3): string {
@@ -305,14 +357,21 @@ async function readSmallTextFile(file: File): Promise<string> {
 
 function App() {
   const { language, setLanguage, tr } = useI18n()
+  const trRef = useRef(tr)
+  trRef.current = tr
   const [nodes, setNodes, onNodesChange] = useNodesState<ScientificFlowNode>([])
   const [edges, setEdges, onEdgesChange] = useEdgesState<ScientificFlowEdge>([])
   const [registry, setRegistry] = useState<Map<string, NodeDefinition>>(new Map())
   const [templateResponse, setTemplateResponse] = useState<TemplateResponse | null>(null)
+  const [workflowTemplates, setWorkflowTemplates] = useState<WorkflowTemplateCatalogItem[]>([])
+  const [workflowDraftSha256, setWorkflowDraftSha256] = useState<string | null>(null)
+  const [workflowRevisions, setWorkflowRevisions] = useState<WorkflowRevision[]>([])
+  const [workflowRunGraphs, setWorkflowRunGraphs] = useState<WorkflowRunGraph[]>([])
   const [capabilities, setCapabilities] = useState<Capabilities | null>(null)
   const [connectionState, setConnectionState] = useState<'loading' | 'online' | 'offline'>('loading')
-  const [activeView, setActiveView] = useState<WorkspaceView>('workflow')
+  const [activeView, setActiveView] = useState<WorkspaceView>('projects')
   const [selectedNodeId, setSelectedNodeId] = useState<string | null>(null)
+  const [workflowInitialized, setWorkflowInitialized] = useState(false)
   const [structure, setStructure] = useState<StructureInspectionResponse | null>(null)
   const [result, setResult] = useState<VaspDemoResult | null>(null)
   const [structureReady, setStructureReady] = useState(false)
@@ -352,6 +411,15 @@ function App() {
   const [constraintSummary, setConstraintSummary] = useState('')
   const [focusedConstraintAtom, setFocusedConstraintAtom] = useState<number | null>(null)
   const [showAllConstraintAtomIndices, setShowAllConstraintAtomIndices] = useState(false)
+  const [chgnetEnabled, setChgnetEnabled] = useState(false)
+  const [chgnetModel, setChgnetModel] = useState<ChgnetPreRelaxationConfig['model_name']>('0.3.0')
+  const [chgnetOptimizer, setChgnetOptimizer] = useState<ChgnetPreRelaxationConfig['optimizer']>('FIRE')
+  const [chgnetFmax, setChgnetFmax] = useState(0.05)
+  const [chgnetMaxSteps, setChgnetMaxSteps] = useState(500)
+  const [chgnetRelaxCell, setChgnetRelaxCell] = useState(false)
+  const [chgnetDevice, setChgnetDevice] = useState<ChgnetPreRelaxationConfig['device']>('auto')
+  const [chgnetConfirmed, setChgnetConfirmed] = useState(false)
+  const [chgnetResult, setChgnetResult] = useState<ChgnetPreRelaxationResponse | null>(null)
   const [potcarLabelText, setPotcarLabelText] = useState('')
   const [projectMaxWalltimeText, setProjectMaxWalltimeText] = useState('')
   const [runs, setRuns] = useState<RunSummary[]>([])
@@ -379,6 +447,7 @@ function App() {
   const [reactionTemplates, setReactionTemplates] = useState<ReactionTemplate[]>([])
   const [reactionTemplateId, setReactionTemplateId] = useState<ReactionTemplate['template_id']>('oer-aem-che')
   const [reactionBindings, setReactionBindings] = useState<Record<string, string>>({})
+  const [reactionOutputImports, setReactionOutputImports] = useState<Record<string, ReactionOutputImport>>({})
   const [reactionEnergies, setReactionEnergies] = useState<Record<string, string>>({
     slab: '-100.000',
     h_star: '-103.450',
@@ -396,6 +465,7 @@ function App() {
   const [reactionAnalysis, setReactionAnalysis] = useState<ReactionAnalysis | null>(null)
   const [confirmRemoteWrite, setConfirmRemoteWrite] = useState(false)
   const [confirmSubmit, setConfirmSubmit] = useState(false)
+  const [confirmCancel, setConfirmCancel] = useState(false)
   const [confirmResultPull, setConfirmResultPull] = useState(false)
   const [busy, setBusy] = useState<string | null>(null)
   const [notice, setNotice] = useState<Notice>({
@@ -410,8 +480,26 @@ function App() {
   const potcarMetadataInputRef = useRef<HTMLInputElement>(null)
   const slurmInputRef = useRef<HTMLInputElement>(null)
   const hpcProfileInputRef = useRef<HTMLInputElement>(null)
+  const reactionOutputInputRef = useRef<HTMLInputElement>(null)
+  const reactionUploadTargetRef = useRef<string | null>(null)
   const languageMenuRef = useRef<HTMLDivElement>(null)
   const currentProjectId = currentProject?.project_id ?? null
+  const refreshActiveProjectArtifacts = useCallback(async () => {
+    if (!currentProjectId) return
+    const [projectArtifacts, projectRecords] = await Promise.all([
+      api.projectArtifacts(currentProjectId),
+      api.projects(),
+    ])
+    setArtifacts(projectArtifacts)
+    setProjects(projectRecords)
+    setCurrentProject((current) =>
+      projectRecords.find((project) => project.project_id === currentProjectId) ?? current,
+    )
+  }, [currentProjectId])
+  const currentProjectStoragePath = localProjectDirectory(
+    capabilities?.persistent_storage_root,
+    currentProjectId,
+  )
 
   useEffect(() => {
     setReviewNote((current) => {
@@ -454,7 +542,10 @@ function App() {
           const raw = localStorage.getItem(STORAGE_KEY)
           if (raw) {
             const saved = JSON.parse(raw) as SavedWorkflow
-            if (saved.schema_version === 'catex.web-local-workflow.v1') {
+            if (
+              saved.schema_version === 'catex.web-local-workflow.v1' &&
+              !hasLegacyStructureWorkflowNodes(saved.nodes)
+            ) {
               nextNodes = rehydrateNodes(saved.nodes, definitions)
               nextEdges = saved.edges
             }
@@ -477,17 +568,30 @@ function App() {
       api.capabilities(),
       api.registry(),
       api.defaultTemplate(),
+      api.workflowTemplates(),
       api.projects(),
       api.paper4ReferenceCase(),
       api.reactionTemplates(),
     ])
-      .then(([capabilityPayload, definitions, templatePayload, projectPayload, referenceCase, templates]) => {
+      .then(([
+        capabilityPayload,
+        definitions,
+        templatePayload,
+        workflowTemplatePayload,
+        projectPayload,
+        referenceCase,
+        templates,
+      ]) => {
         if (cancelled) return
         const definitionMap = new Map(definitions.map((item) => [item.type_id, item]))
         setCapabilities(capabilityPayload)
         setRegistry(definitionMap)
         setTemplateResponse(templatePayload)
-        loadTemplate(templatePayload, definitionMap)
+        setWorkflowTemplates(workflowTemplatePayload)
+        setNodes([])
+        setEdges([])
+        setSelectedNodeId(null)
+        setWorkflowInitialized(false)
         setProjects(projectPayload)
         setPaper4Case(referenceCase)
         setReactionTemplates(templates)
@@ -500,28 +604,61 @@ function App() {
         setNotice({
           tone: 'error',
           message: error instanceof Error
-            ? tr(`本地 API 未连接：${error.message}`, `Local API unavailable: ${error.message}`)
-            : tr('本地 API 未连接。', 'Local API unavailable.'),
+            ? trRef.current(
+                `本地 API 未连接：${error.message}`,
+                `Local API unavailable: ${error.message}`,
+              )
+            : trRef.current('本地 API 未连接。', 'Local API unavailable.'),
         })
       })
     return () => {
       cancelled = true
     }
-  }, [bootstrapKey, loadTemplate, tr])
+  }, [bootstrapKey, setEdges, setNodes])
+
+  useEffect(() => {
+    if (!capabilities || capabilities.chgnet) return
+    let cancelled = false
+    const timer = window.setInterval(() => {
+      void api.capabilities()
+        .then((payload) => {
+          if (!cancelled && payload.chgnet) setCapabilities(payload)
+        })
+        .catch(() => {
+          // The main API status already reports connectivity; keep this recovery probe quiet.
+        })
+    }, 3000)
+    return () => {
+      cancelled = true
+      window.clearInterval(timer)
+    }
+  }, [capabilities])
 
   useEffect(() => {
     if (!currentProjectId || !templateResponse || registry.size === 0) return
     let cancelled = false
     Promise.all([
       api.projectArtifacts(currentProjectId),
-      api.projectWorkflow(currentProjectId),
+      api.projectWorkflowDraft(currentProjectId),
+      api.workflowRevisions(currentProjectId),
+      api.workflowRunGraphs(currentProjectId),
       api.projectCalculationConfig(currentProjectId),
       api.defaultCalculationConfig(),
       api.projectRuns(currentProjectId),
       api.reviewedEnergies(currentProjectId),
       api.calculationResults(currentProjectId),
     ])
-      .then(async ([projectArtifacts, savedWorkflow, savedConfig, defaultConfig, projectRuns, projectEnergies, projectResults]) => {
+      .then(async ([
+        projectArtifacts,
+        savedWorkflow,
+        projectWorkflowRevisions,
+        projectWorkflowRunGraphs,
+        savedConfig,
+        defaultConfig,
+        projectRuns,
+        projectEnergies,
+        projectResults,
+      ]) => {
         if (cancelled) return
         setArtifacts(projectArtifacts)
         const rememberedStructureId = localStorage.getItem(
@@ -541,8 +678,7 @@ function App() {
           setPoscarSource('')
           setStructureReady(false)
         }
-        const savedTypeIds = new Set(savedWorkflow?.nodes.map((node) => node.type_id) ?? [])
-        if (savedWorkflow && savedTypeIds.has('hpc.connect') && savedTypeIds.has('slurm.submit')) {
+        if (savedWorkflow && !hasLegacyStructureWorkflowNodes(savedWorkflow.nodes)) {
           loadTemplate(
             {
               ...templateResponse,
@@ -555,7 +691,17 @@ function App() {
             registry,
             false,
           )
+          setWorkflowDraftSha256(savedWorkflow.draft_sha256)
+          setWorkflowInitialized(true)
+        } else {
+          setNodes([])
+          setEdges([])
+          setSelectedNodeId(null)
+          setWorkflowDraftSha256(null)
+          setWorkflowInitialized(false)
         }
+        setWorkflowRevisions(projectWorkflowRevisions)
+        setWorkflowRunGraphs(projectWorkflowRunGraphs)
         if (restoredStructure && latestStructure) {
           const inspectionStatus: RuntimeStatus =
             restoredStructure.inspection.status === 'error'
@@ -572,7 +718,7 @@ function App() {
                   data: {
                     ...node.data,
                     status: 'success',
-                    detail: tr(
+                    detail: trRef.current(
                       `${latestStructure.original_filename} · 已从项目恢复`,
                       `${latestStructure.original_filename} · restored from project`,
                     ),
@@ -587,7 +733,7 @@ function App() {
                     status: inspectionStatus,
                     detail: restoredStructure.inspection.record
                       ? `${restoredStructure.inspection.record.reduced_formula} · ${restoredStructure.inspection.record.num_sites} atoms`
-                      : tr('结构无法解析', 'Structure could not be parsed'),
+                      : trRef.current('结构无法解析', 'Structure could not be parsed'),
                   },
                 }
               }
@@ -604,6 +750,8 @@ function App() {
         setCalculationPlan(null)
         setMaterialization(null)
         setLocalPotcarReceipt(null)
+        setChgnetResult(null)
+        setChgnetConfirmed(false)
         setRuns(projectRuns)
         setSelectedRunId((current) =>
           projectRuns.some((run) => run.run_id === current)
@@ -616,20 +764,26 @@ function App() {
         setRemoteResult(null)
         setReviewedEnergies(projectEnergies)
         setCalculationResults(projectResults)
+        setReactionBindings({})
+        setReactionOutputImports({})
+        setReactionAnalysis(null)
         setEnergyDerivation(null)
       })
       .catch((error: unknown) => {
         if (!cancelled) {
           setNotice({
             tone: 'error',
-            message: error instanceof Error ? error.message : tr('项目恢复失败。', 'Failed to restore project.'),
+            message:
+              error instanceof Error
+                ? error.message
+                : trRef.current('项目恢复失败。', 'Failed to restore project.'),
           })
         }
       })
     return () => {
       cancelled = true
     }
-  }, [currentProjectId, loadTemplate, registry, setNodes, templateResponse, tr])
+  }, [currentProjectId, loadTemplate, registry, setEdges, setNodes, templateResponse])
 
   const latestStructureArtifact = useMemo(
     () => selectActiveStructureArtifact(artifacts, activeStructureArtifactId) ?? null,
@@ -1104,6 +1258,7 @@ function App() {
         }
         setStructure(payload)
         setPoscarSource(await structureFile.text())
+        setChgnetResult(null)
         setWorkFileSources((current) => ({ ...current, poscar: current.poscar || structureFile.name }))
         setStructureReady(payload.inspection.status !== 'error')
         setResult(null)
@@ -1301,6 +1456,104 @@ function App() {
       setNotice({ tone: 'error', message: error instanceof Error ? error.message : tr('原子固定设置失败。', 'Failed to apply atom constraints.') })
     }
   }, [bottomLayerCount, constraintPreview.error, constraintStrategy, inspectFile, layerTolerance, mobileAtomText, poscarSource, selectiveDynamicsEnabled, tr, workDirectory])
+
+  const runChgnetPreRelaxation = useCallback(async () => {
+    if (!chgnetEnabled) {
+      setNotice({ tone: 'warning', message: tr('请先启用 CHGNet 预弛豫。', 'Enable CHGNet pre-relaxation first.') })
+      return
+    }
+    if (!currentProject || !latestStructureArtifact || !poscarSource) {
+      setNotice({ tone: 'error', message: tr('请先创建项目并导入有效的 POSCAR。', 'Create a project and import a valid POSCAR first.') })
+      return
+    }
+    if (!capabilities?.chgnet) {
+      setNotice({
+        tone: 'error',
+        message: capabilities
+          ? tr(
+              '当前运行的是旧版 CatEx API。请关闭旧启动窗口并重新启动工作台；页面会自动重新探测。',
+              'An older CatEx API is still running. Close the old launcher and restart the workbench; this page will detect it automatically.',
+            )
+          : tr('本地运行环境仍在探测，请稍后重试。', 'The local runtime is still being detected; try again shortly.'),
+      })
+      return
+    }
+    if (!capabilities.chgnet.available) {
+      setNotice({
+        tone: 'error',
+        message: tr(
+          `本机 CHGNet 运行环境不完整：${capabilities.chgnet.missing_packages.join('、') || '未知依赖'}。`,
+          `The local CHGNet runtime is incomplete: ${capabilities.chgnet.missing_packages.join(', ') || 'unknown dependency'}.`,
+        ),
+      })
+      return
+    }
+    if (!chgnetConfirmed) {
+      setNotice({ tone: 'warning', message: tr('请先确认 CHGNet 只用于预弛豫。', 'Confirm that CHGNet is used only for pre-relaxation.') })
+      return
+    }
+    setBusy('chgnet')
+    try {
+      const response = await api.runChgnetPreRelaxation(
+        currentProject.project_id,
+        latestStructureArtifact.artifact_id,
+        {
+          model_name: chgnetModel,
+          optimizer: chgnetOptimizer,
+          fmax_eV_per_angstrom: chgnetFmax,
+          max_steps: chgnetMaxSteps,
+          relax_cell: chgnetRelaxCell,
+          device: chgnetDevice,
+        },
+      )
+      if (workDirectory) {
+        await writeWorkspaceFile(workDirectory, 'POSCAR_CHGNET.vasp', response.poscar_text)
+        await writeWorkspaceFile(workDirectory, 'POSCAR', response.poscar_text)
+      }
+      const artifact = response.output_artifact
+      const inspection = projectArtifactInspection(artifact)
+      setArtifacts((current) => [artifact, ...current.filter((item) => item.artifact_id !== artifact.artifact_id)])
+      setActiveStructureArtifactId(artifact.artifact_id)
+      localStorage.setItem(
+        `${ACTIVE_STRUCTURE_STORAGE_PREFIX}${currentProject.project_id}`,
+        artifact.artifact_id,
+      )
+      setStructure(inspection)
+      setPoscarSource(response.poscar_text)
+      setStructureReady(inspection.inspection.status !== 'error')
+      setWorkFileSources((current) => ({
+        ...current,
+        poscar: workDirectory ? 'POSCAR_CHGNET.vasp → POSCAR' : 'CHGNet project artifact',
+      }))
+      setCalculationPlan(null)
+      setMaterialization(null)
+      setChgnetResult(response)
+      const refreshed = await api.projects()
+      setProjects(refreshed)
+      setCurrentProject(
+        refreshed.find((item) => item.project_id === currentProject.project_id) ?? currentProject,
+      )
+      setNotice({
+        tone: response.summary.converged ? 'success' : 'warning',
+        message: response.summary.converged
+          ? tr(
+              `CHGNet 已在 ${response.summary.n_steps} 步达到 ${response.summary.final_fmax_eV_per_angstrom.toFixed(4)} eV/Å；新结构已设为当前 POSCAR。`,
+              `CHGNet reached ${response.summary.final_fmax_eV_per_angstrom.toFixed(4)} eV/Å in ${response.summary.n_steps} steps; the new structure is now the active POSCAR.`,
+            )
+          : tr(
+              `CHGNet 未达到目标力阈值（最终 ${response.summary.final_fmax_eV_per_angstrom.toFixed(4)} eV/Å），但预处理结构已保留并设为当前 POSCAR；请依靠后续 VASP 完成收敛。`,
+              `CHGNet did not reach the force target (final ${response.summary.final_fmax_eV_per_angstrom.toFixed(4)} eV/Å), but the preconditioned structure was retained and set as the active POSCAR; rely on VASP for final convergence.`,
+            ),
+      })
+    } catch (error) {
+      setNotice({
+        tone: 'error',
+        message: error instanceof Error ? error.message : tr('CHGNet 预弛豫失败。', 'CHGNet pre-relaxation failed.'),
+      })
+    } finally {
+      setBusy(null)
+    }
+  }, [capabilities?.chgnet, chgnetConfirmed, chgnetDevice, chgnetEnabled, chgnetFmax, chgnetMaxSteps, chgnetModel, chgnetOptimizer, chgnetRelaxCell, currentProject, latestStructureArtifact, poscarSource, tr, workDirectory])
 
   const handleConstraintAtomClick = useCallback((index1Based: number) => {
     setFocusedConstraintAtom(index1Based)
@@ -1500,13 +1753,111 @@ function App() {
   }, [result, thermoCutoff, thermoTemperature, tr])
 
   const bindReactionResult = useCallback((stateKey: string, runId: string) => {
-    setReactionBindings((current) => ({ ...current, [stateKey]: runId }))
+    setReactionOutputImports((current) => withoutRecordKey(current, stateKey))
+    setReactionBindings((current) => (
+      runId ? { ...current, [stateKey]: runId } : withoutRecordKey(current, stateKey)
+    ))
     const selected = calculationResults.find((item) => item.run_id === runId)
     if (selected?.energy_eV != null) {
       setReactionEnergies((current) => ({ ...current, [stateKey]: String(selected.energy_eV) }))
     }
     setReactionAnalysis(null)
   }, [calculationResults])
+
+  const updateReactionEnergy = useCallback((stateKey: string, value: string) => {
+    setReactionEnergies((current) => ({ ...current, [stateKey]: value }))
+    setReactionBindings((current) => withoutRecordKey(current, stateKey))
+    setReactionOutputImports((current) => withoutRecordKey(current, stateKey))
+    setReactionAnalysis(null)
+  }, [])
+
+  const chooseReactionOutputFiles = useCallback((stateKey: string) => {
+    reactionUploadTargetRef.current = stateKey
+    reactionOutputInputRef.current?.click()
+  }, [])
+
+  const importReactionOutputFiles = useCallback(async (stateKey: string, files: File[]) => {
+    if (!files.length) return
+    setBusy(`reaction-output:${stateKey}`)
+    try {
+      const document = await api.parseVaspResultFiles(files)
+      const parsed = document.vasp_output
+      const candidates: Array<{
+        kind: ReactionOutputImport['energyKind']
+        value: number | null | undefined
+      }> = [
+        { kind: 'sigma_zero', value: document.energy?.sigma_zero_energy_eV },
+        {
+          kind: 'without_entropy',
+          value: document.energy?.energy_without_entropy_eV,
+        },
+        { kind: 'free_energy', value: document.energy?.free_energy_eV },
+      ]
+      const selected = candidates.find((item) => item.value != null && Number.isFinite(item.value))
+      if (!selected || selected.value == null) {
+        throw new Error(tr(
+          '所选 VASP 结果文件中没有可用的最终能量。',
+          'No usable final energy was found in the selected VASP result files.',
+        ))
+      }
+      const imported: ReactionOutputImport = {
+        filenames: document.upload?.filenames ?? files.map((file) => file.name),
+        energyKind: selected.kind,
+        energyEv: selected.value,
+        status: parsed?.status ?? 'metadata_only',
+        scientificallyComplete: parsed?.scientifically_complete ?? false,
+        ionicConvergence: parsed?.convergence.ionic ?? 'unknown',
+      }
+      setReactionOutputImports((current) => ({ ...current, [stateKey]: imported }))
+      setReactionBindings((current) => withoutRecordKey(current, stateKey))
+      setReactionEnergies((current) => ({ ...current, [stateKey]: String(selected.value) }))
+      setReactionAnalysis(null)
+      setNotice({
+        tone: parsed?.scientifically_complete ? 'success' : 'warning',
+        message: tr(
+          `已从 ${imported.filenames.join(' + ')} 读取 ${selected.kind} 能量 ${selected.value.toFixed(6)} eV。`,
+          `Read ${selected.kind} energy ${selected.value.toFixed(6)} eV from ${imported.filenames.join(' + ')}.`,
+        ),
+      })
+    } catch (error) {
+      setNotice({
+        tone: 'error',
+        message: error instanceof Error
+          ? error.message
+          : tr('VASP 结果文件读取失败。', 'Failed to read VASP output files.'),
+      })
+    } finally {
+      setBusy(null)
+    }
+  }, [tr])
+
+  const refreshReactionResults = useCallback(async () => {
+    if (!currentProject) {
+      setNotice({ tone: 'warning', message: tr('请先打开一个项目。', 'Open a project first.') })
+      return
+    }
+    setBusy('reaction-results-refresh')
+    try {
+      const refreshed = await api.calculationResults(currentProject.project_id)
+      setCalculationResults(refreshed)
+      setNotice({
+        tone: 'success',
+        message: tr(
+          `已刷新项目计算结果，共 ${refreshed.length} 条。`,
+          `Refreshed ${refreshed.length} project calculation result(s).`,
+        ),
+      })
+    } catch (error) {
+      setNotice({
+        tone: 'error',
+        message: error instanceof Error
+          ? error.message
+          : tr('项目计算结果刷新失败。', 'Failed to refresh project calculation results.'),
+      })
+    } finally {
+      setBusy(null)
+    }
+  }, [currentProject, tr])
 
   const calculateReactionAnalysis = useCallback(async () => {
     if (!activeReactionTemplate) return
@@ -1541,15 +1892,14 @@ function App() {
   }, [activeReactionTemplate, calculationResults, h2Energy, h2oEnergy, reactionBindings, reactionCorrections, reactionEnergies, reactionPh, reactionPotential, reactionTemperature, reactionTemplateId, referenceElectrode, tr])
 
   const saveWorkflow = useCallback(async () => {
-    const payload: SavedWorkflow = {
-      schema_version: 'catex.web-local-workflow.v1',
-      nodes,
-      edges,
-    }
-    localStorage.setItem(STORAGE_KEY, JSON.stringify(payload))
     if (currentProject) {
       try {
-        await api.saveProjectWorkflow(currentProject.project_id, buildValidationRequest(nodes, edges))
+        const response = await api.saveProjectWorkflowDraft(
+          currentProject.project_id,
+          buildValidationRequest(nodes, edges),
+          workflowDraftSha256 ?? undefined,
+        )
+        setWorkflowDraftSha256(response.draft.draft_sha256)
         const refreshed = await api.projects()
         setProjects(refreshed)
         setCurrentProject(
@@ -1558,7 +1908,10 @@ function App() {
         )
         setNotice({
           tone: 'success',
-          message: tr('工作流已持久化到当前 CatEx 项目。', 'The workflow was persisted to the current CatEx project.'),
+          message: tr(
+            `工作流草稿第 ${response.draft.generation} 代已保存到当前项目。`,
+            `Workflow draft generation ${response.draft.generation} was saved to the current project.`,
+          ),
         })
         return
       } catch (error) {
@@ -1569,11 +1922,118 @@ function App() {
         return
       }
     }
+    const payload: SavedWorkflow = {
+      schema_version: 'catex.web-local-workflow.v1',
+      nodes,
+      edges,
+    }
+    localStorage.setItem(STORAGE_KEY, JSON.stringify(payload))
     setNotice({
       tone: 'success',
       message: tr('工作流布局已保存在当前浏览器。', 'The workflow layout was saved in this browser.'),
     })
-  }, [currentProject, edges, nodes, tr])
+  }, [currentProject, edges, nodes, tr, workflowDraftSha256])
+
+  const publishWorkflow = useCallback(async () => {
+    if (!currentProject) {
+      setNotice({
+        tone: 'error',
+        message: tr('请先创建或打开一个项目。', 'Create or open a project first.'),
+      })
+      return
+    }
+    setBusy('workflow-publish')
+    try {
+      const saved = await api.saveProjectWorkflowDraft(
+        currentProject.project_id,
+        buildValidationRequest(nodes, edges),
+        workflowDraftSha256 ?? undefined,
+      )
+      setWorkflowDraftSha256(saved.draft.draft_sha256)
+      const published = await api.publishWorkflowRevision(
+        currentProject.project_id,
+        `${currentProject.title} workflow`,
+      )
+      const revisions = await api.workflowRevisions(currentProject.project_id)
+      setWorkflowRevisions(revisions)
+      setNotice({
+        tone: 'success',
+        message: tr(
+          `已发布不可变版本 ${published.revision.revision_id}。`,
+          `Published immutable revision ${published.revision.revision_id}.`,
+        ),
+      })
+    } catch (error) {
+      setNotice({
+        tone: 'error',
+        message:
+          error instanceof Error
+            ? error.message
+            : tr('工作流发布失败。', 'Failed to publish the workflow.'),
+      })
+    } finally {
+      setBusy(null)
+    }
+  }, [currentProject, edges, nodes, tr, workflowDraftSha256])
+
+  const createWorkflowRunGraph = useCallback(async () => {
+    if (!currentProject || workflowRevisions.length === 0) return
+    setBusy('workflow-run-graph')
+    try {
+      const latest = workflowRevisions[0]
+      const runGraph = await api.createWorkflowRunGraph(
+        currentProject.project_id,
+        latest.revision_id,
+        `${currentProject.title} · ${new Date().toLocaleString()}`,
+      )
+      const executionPlan = await api.workflowExecutionPlan(
+        currentProject.project_id,
+        runGraph.run_graph_id,
+      )
+      setWorkflowRunGraphs((current) => [runGraph, ...current])
+      setNotice({
+        tone: 'success',
+        message: tr(
+          `运行快照 ${runGraph.run_graph_id} 已创建，共 ${executionPlan.stage_count} 个计算阶段；尚未连接或提交超算。`,
+          `Run snapshot ${runGraph.run_graph_id} was created with ${executionPlan.stage_count} calculation stage(s); no HPC connection or submission occurred.`,
+        ),
+      })
+    } catch (error) {
+      setNotice({
+        tone: 'error',
+        message:
+          error instanceof Error
+            ? error.message
+            : tr('运行快照创建失败。', 'Failed to create the run snapshot.'),
+      })
+    } finally {
+      setBusy(null)
+    }
+  }, [currentProject, tr, workflowRevisions])
+
+  const applyWorkflowTemplate = useCallback(
+    (template: WorkflowTemplateCatalogItem) => {
+      if (registry.size === 0) return
+      loadTemplate(
+        {
+          template,
+          validation: template.validation,
+        },
+        registry,
+        false,
+      )
+      setWorkflowInitialized(true)
+      if (!currentProject) setWorkflowDraftSha256(null)
+      setNotice({
+        tone: 'neutral',
+        message: tr(
+          `已载入“${template.title}”模板；保存前仍可继续编辑。`,
+          `Loaded the “${localizeWorkflowTemplate(template, 'en').title}” template; it remains editable until saved.`,
+        ),
+      })
+    },
+    [currentProject, loadTemplate, registry, tr],
+  )
 
   const createProject = useCallback(async () => {
     setBusy('project')
@@ -1589,6 +2049,7 @@ function App() {
       const refreshed = await api.projects()
       setProjects(refreshed)
       setCurrentProject(created)
+      setWorkflowInitialized(false)
       setActiveView('workflow')
       setNotice({
         tone: 'success',
@@ -1614,6 +2075,8 @@ function App() {
       const refreshed = await api.projects()
       setProjects(refreshed)
       setCurrentProject(created)
+      setWorkflowInitialized(false)
+      setActiveView('workflow')
       setNotice({
         tone: 'warning',
         message: tr(
@@ -1633,30 +2096,39 @@ function App() {
 
   const selectProject = useCallback((project: ProjectRecord) => {
     setCurrentProject(project)
+    setWorkflowInitialized(false)
     setStructureReady(false)
     setResult(null)
     setResultReviewed(false)
+    setActiveView('workflow')
     setNotice({
       tone: 'neutral',
       message: tr(`已打开项目“${project.title}”。`, `Opened project “${project.title}”.`),
     })
   }, [tr])
 
-  const resetWorkflow = useCallback(() => {
-    if (!templateResponse || registry.size === 0) return
-    localStorage.removeItem(STORAGE_KEY)
-    loadTemplate(templateResponse, registry, false)
-    setStructure(null)
-    setPoscarSource('')
-    setImportedInputNames({ incar: '', kpoints: '', potcar: '' })
-    setResult(null)
-    setStructureReady(false)
-    setResultReviewed(false)
+  const clearWorkflowCanvas = useCallback(() => {
+    if (
+      nodes.length > 0 &&
+      !window.confirm(
+        tr(
+          '这会清空当前画布中的节点和连线，但不会删除项目文件或已发布版本。是否继续？',
+          'This clears nodes and edges from the current canvas, but does not delete project files or published revisions. Continue?',
+        ),
+      )
+    ) return
+    setNodes([])
+    setEdges([])
+    setSelectedNodeId(null)
+    setWorkflowInitialized(true)
     setNotice({
       tone: 'neutral',
-      message: tr('已恢复只读 POC 默认模板。', 'The read-only default POC template was restored.'),
+      message: tr(
+        '当前画布已清空；项目文件和已发布版本未被删除。',
+        'The current canvas was cleared; project files and published revisions were not deleted.',
+      ),
     })
-  }, [loadTemplate, registry, templateResponse, tr])
+  }, [nodes.length, setEdges, setNodes, tr])
 
   const validateCurrentWorkflow = useCallback(async () => {
     try {
@@ -2068,6 +2540,37 @@ function App() {
     }
   }, [currentProject, hpcProfile, selectedRun, tr])
 
+  const cancelRemoteRun = useCallback(async () => {
+    if (!currentProject || !selectedRun) return
+    setBusy('hpc-cancel')
+    try {
+      const response = await api.cancelRemoteRun(
+        currentProject.project_id,
+        hpcProfile,
+        selectedRun.run_id,
+        confirmCancel,
+      )
+      setConfirmCancel(false)
+      setNotice({
+        tone: 'warning',
+        message: tr(
+          `已向 Slurm 请求取消作业 ${response.job_id}；远端计算文件没有被修改或删除，请刷新调度状态确认结果。`,
+          `Cancellation was requested for Slurm job ${response.job_id}. No remote calculation files were modified or deleted; refresh the scheduler state to confirm.`,
+        ),
+      })
+    } catch (error) {
+      setNotice({
+        tone: 'error',
+        message:
+          error instanceof Error
+            ? error.message
+            : tr('作业取消请求失败。', 'Failed to request job cancellation.'),
+      })
+    } finally {
+      setBusy(null)
+    }
+  }, [confirmCancel, currentProject, hpcProfile, selectedRun, tr])
+
   const pullRemoteResults = useCallback(async () => {
     if (!currentProject || !selectedRun) return
     setBusy('hpc-pull')
@@ -2117,6 +2620,31 @@ function App() {
           </a>
         )}
       </div>
+      {capabilities?.persistent_storage_root && (
+        <article className="project-storage-card">
+          <div>
+            <FolderOpen size={19} />
+            <span>
+              <strong>{tr('本地项目保存位置', 'Local project storage')}</strong>
+              <code>
+                {currentProjectStoragePath ||
+                  `${capabilities.persistent_storage_root}${capabilities.persistent_storage_root.includes('\\') ? '\\' : '/'}projects`}
+              </code>
+            </span>
+          </div>
+          <button
+            className="secondary-button"
+            onClick={() =>
+              void navigator.clipboard.writeText(
+                currentProjectStoragePath ||
+                  `${capabilities.persistent_storage_root}${capabilities.persistent_storage_root.includes('\\') ? '\\' : '/'}projects`,
+              )}
+            type="button"
+          >
+            <Copy size={14} /> {tr('复制路径', 'Copy path')}
+          </button>
+        </article>
+      )}
       <div className="project-grid">
         <article className="project-create-card">
           <span className="eyebrow">NEW PROJECT</span>
@@ -2208,82 +2736,51 @@ function App() {
   )
 
   const renderWorkflow = () => (
-    <section className="canvas-card">
-      <div className="canvas-toolbar">
-        <div>
-          <span className="eyebrow">ADVANCED GRAPH</span>
-          <h2>{tr('结构到计算结果', 'Structure to calculation results')}</h2>
-        </div>
-        <div className="toolbar-actions">
-          <button className="ghost-button" onClick={() => void validateCurrentWorkflow()} type="button">
-            <ShieldCheck size={15} /> {tr('校验', 'Validate')}
-          </button>
-          <button className="ghost-button" onClick={() => void saveWorkflow()} type="button">
-            <Save size={15} /> {tr('保存布局', 'Save layout')}
-          </button>
-          <button className="ghost-button" onClick={resetWorkflow} type="button">
-            <RotateCcw size={15} /> {tr('重置', 'Reset')}
-          </button>
-        </div>
-      </div>
-      <div className="workflow-canvas">
-        {connectionState !== 'online' ? (
-          <div className="connection-empty">
-            {connectionState === 'loading' ? (
-              <LoaderCircle className="spin" size={28} />
-            ) : (
-              <ServerOff size={32} />
-            )}
-            <strong>{connectionState === 'loading' ? tr('正在连接本地 API', 'Connecting to local API') : tr('本地 API 未启动', 'Local API is offline')}</strong>
-            <span>{tr('后端只需监听 127.0.0.1:8000', 'The backend only needs to listen on 127.0.0.1:8000')}</span>
-            {connectionState === 'offline' && (
-              <button onClick={() => setBootstrapKey((value) => value + 1)} type="button">
-                <RefreshCw size={14} /> {tr('重试', 'Retry')}
-              </button>
-            )}
-          </div>
-        ) : (
-          <ReactFlow
-            colorMode="dark"
-            defaultEdgeOptions={{ type: 'smoothstep' }}
-            edges={edges}
-            fitView
-            fitViewOptions={{ padding: 0.18 }}
-            isValidConnection={(connection) =>
-              compatibleHandles(connection.sourceHandle ?? null, connection.targetHandle ?? null)
-            }
-            maxZoom={1.35}
-            minZoom={0.28}
-            nodeTypes={nodeTypes}
-            nodes={nodes}
-            onConnect={onConnect}
-            onEdgesChange={onEdgesChange}
-            onNodeClick={(_, node) => setSelectedNodeId(node.id)}
-            onNodeDoubleClick={(_, node) => {
-              setSelectedNodeId(node.id)
-              setActiveView(NODE_VIEW[node.data.definition.type_id] ?? 'workflow')
-            }}
-            onNodesChange={onNodesChange}
-          >
-            <Background color="#27423a" gap={22} size={1} />
-            <Controls position="bottom-left" showInteractive={false} />
-            <MiniMap
-              maskColor="rgba(5, 14, 12, 0.78)"
-              nodeColor={(node) =>
-                node.data?.status === 'success'
-                  ? '#57c9a2'
-                  : node.data?.status === 'blocked'
-                    ? '#db6b67'
-                    : '#5c776f'
-              }
-              pannable
-              position="bottom-right"
-              zoomable
-            />
-          </ReactFlow>
-        )}
-      </div>
-    </section>
+    <WorkflowWorkbench
+      connectionState={connectionState}
+      edges={edges}
+      nodes={nodes}
+      onApplyTemplate={applyWorkflowTemplate}
+      onConnect={onConnect}
+      onCreateRunGraph={() => void createWorkflowRunGraph()}
+      onEdgesChange={onEdgesChange}
+      onInitializeBlank={() => {
+        setNodes([])
+        setEdges([])
+        setSelectedNodeId(null)
+        setWorkflowInitialized(true)
+        setNotice({
+          tone: 'neutral',
+          message: tr(
+            '已建立空白工作流；可在画布上右键新建第一个节点。',
+            'Blank workflow created; right-click the canvas to add the first node.',
+          ),
+        })
+      }}
+      onNodesChange={onNodesChange}
+      onOpenNode={(node) => {
+        setSelectedNodeId(node.id)
+        setActiveView(NODE_VIEW[node.data.definition.type_id] ?? 'workflow')
+      }}
+      onOpenProjects={() => setActiveView('projects')}
+      onPublish={() => void publishWorkflow()}
+      onClear={clearWorkflowCanvas}
+      onRetry={() => setBootstrapKey((value) => value + 1)}
+      onSave={() => void saveWorkflow()}
+      onSelectNode={setSelectedNodeId}
+      onValidate={() => void validateCurrentWorkflow()}
+      projectReady={Boolean(currentProject)}
+      projectStoragePath={currentProjectStoragePath}
+      projectTitle={currentProject?.title ?? null}
+      registry={registry}
+      revisions={workflowRevisions}
+      runGraphs={workflowRunGraphs}
+      selectedNodeId={selectedNodeId}
+      setEdges={setEdges}
+      setNodes={setNodes}
+      templates={workflowTemplates}
+      workflowInitialized={workflowInitialized}
+    />
   )
 
   const renderStructure = () => (
@@ -2312,7 +2809,7 @@ function App() {
             if (scrollArea instanceof HTMLElement) scrollArea.scrollTop += event.deltaY
           }}
         >
-          <StructureViewer structure={structure?.viewer ?? null} />
+          <StructureViewer atomScale={0.76} cameraZoom={1.35} structure={structure?.viewer ?? null} />
         </div>
         <div className="metrics-column">
           <article className="metric-card feature-metric">
@@ -2492,6 +2989,7 @@ function App() {
                         mobileAtomIndices1Based={constraintPreview.mobileIndices1Based}
                         onAtomClick={handleConstraintAtomClick}
                         showAtomIndices={showAllConstraintAtomIndices}
+                        showInspector={false}
                         structure={structure?.viewer ?? null}
                       />
                     </div>
@@ -2578,6 +3076,153 @@ function App() {
                       <Atom size={16} /> {tr('应用约束并更新 POSCAR', 'Apply constraints and update POSCAR')}
                     </button>
                   </div>
+                </div>
+              )}
+            </section>
+            <section className={`chgnet-prerelax-panel ${chgnetEnabled ? 'enabled' : ''}`}>
+              <div className="card-heading">
+                <div>
+                  <span className="eyebrow">OPTIONAL MLIP → VASP</span>
+                  <h4>{tr('CHGNet 结构预弛豫', 'CHGNet structure pre-relaxation')}</h4>
+                </div>
+                <label className="constraint-enable-toggle">
+                  <input
+                    checked={chgnetEnabled}
+                    onChange={(event) => setChgnetEnabled(event.target.checked)}
+                    type="checkbox"
+                  />
+                  <span>{tr('启用可选预弛豫', 'Enable optional pre-relaxation')}</span>
+                </label>
+              </div>
+              {!chgnetEnabled ? (
+                <p className="constraint-disabled-note">{tr(
+                  '默认关闭。启用后可在本机用 CHGNet 快速整理初始几何，再把新结构交给 VASP 正式优化。',
+                  'Off by default. Enable it to precondition the initial geometry locally with CHGNet before the formal VASP optimization.',
+                )}</p>
+              ) : (
+                <div className="chgnet-prerelax-body">
+                  <div className={`chgnet-runtime ${capabilities?.chgnet?.available ? 'ready' : capabilities && !capabilities.chgnet ? 'stale' : 'missing'}`}>
+                    {capabilities?.chgnet?.available ? <Check size={15} /> : <AlertTriangle size={15} />}
+                    <span>
+                      <strong>{capabilities?.chgnet?.available
+                        ? tr('本机运行环境已就绪', 'Local runtime ready')
+                        : !capabilities
+                          ? tr('正在探测本机环境', 'Detecting local runtime')
+                          : !capabilities.chgnet
+                            ? tr('当前后端需要重启', 'Backend restart required')
+                            : tr('本机运行环境不完整', 'Local runtime incomplete')}</strong>
+                      <small>{capabilities?.chgnet?.available
+                        ? `CHGNet ${capabilities.chgnet.packages.chgnet?.version ?? '—'} · torch ${capabilities.chgnet.packages.torch?.version ?? '—'} · ${tr('不连接超算', 'no HPC contact')}`
+                        : !capabilities
+                          ? tr('正在联系本地 CatEx API…', 'Contacting the local CatEx API…')
+                          : !capabilities.chgnet
+                            ? tr(
+                                '检测到启动本功能之前的旧 API 进程；请关闭旧启动窗口并重新双击启动器。',
+                                'An API process from before this feature was installed is still running; close the old launcher and start CatEx again.',
+                              )
+                            : tr(
+                                `缺少：${capabilities.chgnet.missing_packages.join('、') || '未知依赖'}`,
+                                `Missing: ${capabilities.chgnet.missing_packages.join(', ') || 'unknown dependency'}`,
+                              )}</small>
+                    </span>
+                    {capabilities && !capabilities.chgnet && (
+                      <button className="secondary-button" onClick={() => setBootstrapKey((value) => value + 1)} type="button">
+                        <RefreshCw size={14} /> {tr('重新探测', 'Detect again')}
+                      </button>
+                    )}
+                  </div>
+                  <p>{tr(
+                    'CatEx 会读取当前 POSCAR；若其中已有 F F F / T T T 标记，CHGNet 会保持固定原子不动。原始结构继续保留，输出作为新的项目结构记录。',
+                    'CatEx reads the active POSCAR and honors F F F / T T T flags. The source structure is retained and the output becomes a new project structure record.',
+                  )}</p>
+                  <div className="chgnet-config-grid">
+                    <label>{tr('预训练模型', 'Pretrained model')}
+                      <select onChange={(event) => setChgnetModel(event.target.value as ChgnetPreRelaxationConfig['model_name'])} value={chgnetModel}>
+                        <option value="0.3.0">0.3.0 · MPtrj / GGA(+U)</option>
+                        <option value="r2scan">r2scan · MP-r2SCAN</option>
+                      </select>
+                    </label>
+                    <label>{tr('优化器', 'Optimizer')}
+                      <select onChange={(event) => setChgnetOptimizer(event.target.value as ChgnetPreRelaxationConfig['optimizer'])} value={chgnetOptimizer}>
+                        <option value="FIRE">FIRE</option>
+                        <option value="BFGS">BFGS</option>
+                        <option value="LBFGS">LBFGS</option>
+                      </select>
+                    </label>
+                    <label>{tr('目标最大力 (eV/Å)', 'Target max force (eV/Å)')}
+                      <input max={1} min={0.005} onChange={(event) => setChgnetFmax(Number(event.target.value))} step={0.005} type="number" value={chgnetFmax} />
+                    </label>
+                    <label>{tr('最大优化步数', 'Maximum steps')}
+                      <input max={5000} min={1} onChange={(event) => setChgnetMaxSteps(Number(event.target.value))} step={10} type="number" value={chgnetMaxSteps} />
+                    </label>
+                    <label>{tr('计算设备', 'Compute device')}
+                      <select onChange={(event) => setChgnetDevice(event.target.value as ChgnetPreRelaxationConfig['device'])} value={chgnetDevice}>
+                        <option value="auto">{tr('自动选择', 'Auto select')}</option>
+                        <option value="cpu">CPU</option>
+                        {capabilities?.chgnet?.cuda_available && <option value="cuda">CUDA GPU</option>}
+                      </select>
+                    </label>
+                    <label className="chgnet-cell-toggle">
+                      <input checked={chgnetRelaxCell} onChange={(event) => setChgnetRelaxCell(event.target.checked)} type="checkbox" />
+                      <span><strong>{tr('同时优化晶胞', 'Relax the cell')}</strong><small>{tr('表面/真空模型建议关闭', 'Keep off for slabs/vacuum')}</small></span>
+                    </label>
+                  </div>
+                  {chgnetRelaxCell && (
+                    <div className="inline-warning"><AlertTriangle size={15} /> {tr(
+                      '优化晶胞可能改变表面横向晶格和真空层；若 POSCAR 含固定原子，受控模式会拒绝该组合。',
+                      'Cell relaxation can alter lateral lattice vectors and vacuum; bounded mode rejects it when fixed atoms are present.',
+                    )}</div>
+                  )}
+                  <label className="confirmation-row chgnet-confirmation">
+                    <input checked={chgnetConfirmed} onChange={(event) => setChgnetConfirmed(event.target.checked)} type="checkbox" />
+                    {tr(
+                      '我理解 CHGNet 只生成 VASP 初始结构，能量和收敛结论不能替代最终 DFT。',
+                      'I understand that CHGNet only prepares the VASP starting structure; its energy and convergence do not replace final DFT.',
+                    )}
+                  </label>
+                  <button
+                    className="primary-button chgnet-run-button"
+                    disabled={!capabilities?.chgnet?.available || !chgnetConfirmed || !latestStructureArtifact || busy !== null}
+                    onClick={() => void runChgnetPreRelaxation()}
+                    type="button"
+                  >
+                    {busy === 'chgnet' ? <LoaderCircle className="spin" size={16} /> : <Sparkles size={16} />}
+                    {busy === 'chgnet'
+                      ? tr('正在本机预弛豫…', 'Pre-relaxing locally…')
+                      : tr('运行并采用预弛豫结构', 'Run and use pre-relaxed structure')}
+                  </button>
+                  {chgnetResult && (
+                    <div className={`chgnet-result ${chgnetResult.summary.converged ? 'converged' : 'unconverged'}`}>
+                      <div className="chgnet-result-heading">
+                        <span>{chgnetResult.summary.converged ? <Check size={17} /> : <AlertTriangle size={17} />}</span>
+                        <strong>{chgnetResult.summary.converged
+                          ? tr('预弛豫达到目标力阈值', 'Pre-relaxation reached the force target')
+                          : tr('预弛豫未达到目标力阈值', 'Pre-relaxation did not reach the force target')}</strong>
+                        <small>{chgnetResult.relaxation_id}</small>
+                      </div>
+                      <dl>
+                        <div><dt>{tr('优化步数', 'Steps')}</dt><dd>{chgnetResult.summary.n_steps}</dd></div>
+                        <div><dt>Fmax</dt><dd>{chgnetResult.summary.final_fmax_eV_per_angstrom.toFixed(4)} eV/Å</dd></div>
+                        <div><dt>ΔE (MLIP)</dt><dd>{chgnetResult.summary.energy_change_eV.toFixed(4)} eV</dd></div>
+                        <div><dt>{tr('最大位移', 'Max displacement')}</dt><dd>{chgnetResult.summary.maximum_displacement_angstrom.toFixed(3)} Å</dd></div>
+                        <div><dt>{tr('固定 / 放开', 'Fixed / mobile')}</dt><dd>{chgnetResult.summary.fixed_atom_count} / {chgnetResult.summary.mobile_atom_count}</dd></div>
+                        <div><dt>{tr('设备', 'Device')}</dt><dd>{chgnetResult.summary.device}</dd></div>
+                      </dl>
+                      <small>{workDirectory
+                        ? tr(
+                            '已保存为新的项目结构；本地工作文件夹同时写入 POSCAR_CHGNET.vasp 和当前 POSCAR。',
+                            'Saved as a new project structure; POSCAR_CHGNET.vasp and the active POSCAR were also written to the local work folder.',
+                          )
+                        : tr(
+                            '已保存为新的项目结构；尚未选择本地工作文件夹，因此没有写入本机 POSCAR。',
+                            'Saved as a new project structure; no local POSCAR was written because no work folder is selected.',
+                          )}</small>
+                    </div>
+                  )}
+                  <div className="inline-warning chgnet-domain-warning"><Info size={15} /> {tr(
+                    '通用势对表面、吸附物、缺陷和特殊电荷态可能超出训练域；请检查几何并始终用 VASP 重新优化。',
+                    'A universal potential may be out of domain for surfaces, adsorbates, defects, and unusual charge states; inspect the geometry and always re-optimize with VASP.',
+                  )}</div>
                 </div>
               )}
             </section>
@@ -2954,8 +3599,38 @@ function App() {
               </section>
               <section>
                 <strong>{tr('3. 只读观测', '3. Read-only observation')}</strong>
-                <p>{tr('仅运行固定字段的 squeue / sacct，不提供取消、删除或自动续算。', 'Only fixed-field squeue/sacct commands are available; no cancel, delete, or automatic restart.')}</p>
+                <p>{tr(
+                  '固定字段读取 squeue / sacct；失败会分类并给出人工续算建议，但不会自动修改科学参数或重新提交。',
+                  'Fixed-field squeue/sacct reads classify failures and provide reviewed restart guidance without changing scientific parameters or resubmitting automatically.',
+                )}</p>
                 <button disabled={!hpcConnected || !selectedRun || !(hpcJobId || selectedRun.job_id) || busy !== null} onClick={() => void observeRemoteRun()} type="button">{tr('刷新调度状态', 'Refresh scheduler state')}</button>
+                <label className="confirmation-row">
+                  <input
+                    checked={confirmCancel}
+                    onChange={(event) => setConfirmCancel(event.target.checked)}
+                    type="checkbox"
+                  />
+                  {tr(
+                    '确认只取消当前绑定的 Slurm 作业；不删除远端文件。',
+                    'Cancel only the currently bound Slurm job without deleting remote files.',
+                  )}
+                </label>
+                <button
+                  className="danger-button"
+                  disabled={
+                    !hpcConnected ||
+                    !selectedRun ||
+                    !(hpcJobId || selectedRun.job_id) ||
+                    selectedRun.cancellation_requested ||
+                    hpcObservation?.report.observation?.terminal === true ||
+                    !confirmCancel ||
+                    busy !== null
+                  }
+                  onClick={() => void cancelRemoteRun()}
+                  type="button"
+                >
+                  {tr('请求取消当前作业', 'Request job cancellation')}
+                </button>
               </section>
               <section>
                 <strong>{tr('4. 拉取并解析', '4. Pull and parse')}</strong>
@@ -3139,6 +3814,28 @@ function App() {
           </article>
         </div>
 
+        {remoteResult?.restart_assessment && (
+          <article className="restart-assessment-card">
+            <div>
+              <span className="eyebrow">FAILURE & RESTART ASSESSMENT</span>
+              <h3>
+                {tr(
+                  `续算结论：${remoteResult.restart_assessment.status}`,
+                  `Restart assessment: ${remoteResult.restart_assessment.status}`,
+                )}
+              </h3>
+              <p>
+                {remoteResult.restart_assessment.failure_categories.length
+                  ? remoteResult.restart_assessment.failure_categories.join(' · ')
+                  : tr('没有检测到需要续算的失败类别。', 'No restart failure category was detected.')}
+              </p>
+            </div>
+            <span className="safety-chip">
+              {tr('不会自动改参数或提交', 'No automatic parameter change or submission')}
+            </span>
+          </article>
+        )}
+
         {result?.vibrations && (
           <article className="vibration-panel">
             <div className="card-heading"><div><span className="eyebrow">VIBRATIONAL THERMOCHEMISTRY</span><h3>{tr('振动频率与热化学校正', 'Frequencies and thermochemical correction')}</h3></div><span className={result.vibrations.imaginary_mode_count ? 'warning-chip' : 'success-chip'}>{result.vibrations.imaginary_mode_count} {tr('个虚频', 'imaginary')}</span></div>
@@ -3169,16 +3866,74 @@ function App() {
       </div>
       <div className="analysis-layout">
         <article className="analysis-form-card">
+          <input
+            accept=".xml,OUTCAR,OSZICAR,CONTCAR,XDATCAR,CHGCAR,LOCPOT,ELFCAR"
+            hidden
+            multiple
+            onChange={(event) => {
+              const target = reactionUploadTargetRef.current
+              const files = Array.from(event.target.files ?? [])
+              if (target && files.length) void importReactionOutputFiles(target, files)
+              event.target.value = ''
+            }}
+            ref={reactionOutputInputRef}
+            type="file"
+          />
           <label>{tr('反应模板', 'Reaction template')}<select onChange={(event) => { setReactionTemplateId(event.target.value as ReactionTemplate['template_id']); setReactionAnalysis(null) }} value={reactionTemplateId}>{reactionTemplates.map((template) => <option key={template.template_id} value={template.template_id}>{template.template_id === 'her-che' ? 'HER · CHE' : 'OER · AEM/CHE'}</option>)}</select></label>
+          <div className="reaction-source-toolbar">
+            <div>
+              <strong>{tr('计算结果能量', 'Calculation-result energies')}</strong>
+              <span>{tr(
+                `当前项目可绑定 ${calculationResults.length} 条结果；也可上传 OUTCAR、vasprun.xml 等 VASP 结果文件。`,
+                `${calculationResults.length} project result(s) can be bound; OUTCAR, vasprun.xml, and other VASP result files can also be uploaded.`,
+              )}</span>
+            </div>
+            <button className="secondary-button" disabled={busy !== null || !currentProject} onClick={() => void refreshReactionResults()} type="button">
+              {busy === 'reaction-results-refresh' ? <LoaderCircle className="spin" size={14} /> : <RefreshCw size={14} />}
+              {tr('刷新项目结果', 'Refresh project results')}
+            </button>
+          </div>
           <div className="state-binding-list">
-            {activeReactionTemplate?.state_keys.map((key) => (
-              <section className="state-binding-row" key={key}>
-                <strong>{key.replace('_star', '*')}</strong>
-                <label>{tr('绑定计算结果', 'Bind result')}<select onChange={(event) => bindReactionResult(key, event.target.value)} value={reactionBindings[key] ?? ''}><option value="">{tr('手动输入', 'Manual value')}</option>{calculationResults.map((item) => <option disabled={item.energy_eV == null} key={item.run_id} value={item.run_id}>{item.run_id} · {formatNumber(item.energy_eV, 4)} eV</option>)}</select></label>
-                <label>E<sub>DFT</sub> (eV)<input onChange={(event) => { setReactionEnergies((current) => ({ ...current, [key]: event.target.value })); setReactionAnalysis(null) }} type="number" value={reactionEnergies[key] ?? ''} /></label>
-                <label>G<sub>corr</sub> (eV)<input onChange={(event) => { setReactionCorrections((current) => ({ ...current, [key]: event.target.value })); setReactionAnalysis(null) }} placeholder="0.000" type="number" value={reactionCorrections[key] ?? ''} /></label>
-              </section>
-            ))}
+            {activeReactionTemplate?.state_keys.map((key) => {
+              const uploaded = reactionOutputImports[key]
+              const sourceValue = uploaded ? '__uploaded__' : reactionBindings[key] ?? ''
+              return (
+                <section className="state-binding-row" key={key}>
+                  <strong>{key.replace('_star', '*')}</strong>
+                  <div className="reaction-source-control">
+                    <label>{tr('能量来源', 'Energy source')}
+                      <select
+                        onChange={(event) => {
+                          if (event.target.value !== '__uploaded__') bindReactionResult(key, event.target.value)
+                        }}
+                        value={sourceValue}
+                      >
+                        <option value="">{tr('手动输入', 'Manual value')}</option>
+                        {uploaded && <option value="__uploaded__">{tr('已上传 VASP 结果', 'Uploaded VASP output')}</option>}
+                        {calculationResults.map((item) => <option disabled={item.energy_eV == null} key={item.run_id} value={item.run_id}>{item.run_id} · {formatNumber(item.energy_eV, 4)} eV</option>)}
+                      </select>
+                    </label>
+                    <button className="result-file-button" disabled={busy !== null} onClick={() => chooseReactionOutputFiles(key)} type="button">
+                      {busy === `reaction-output:${key}` ? <LoaderCircle className="spin" size={14} /> : <FileUp size={14} />}
+                      {tr('读取结果文件', 'Read output files')}
+                    </button>
+                  </div>
+                  <label>E<sub>DFT</sub> (eV)<input onChange={(event) => updateReactionEnergy(key, event.target.value)} type="number" value={reactionEnergies[key] ?? ''} /></label>
+                  <label>G<sub>corr</sub> (eV)<input onChange={(event) => { setReactionCorrections((current) => ({ ...current, [key]: event.target.value })); setReactionAnalysis(null) }} placeholder="0.000" type="number" value={reactionCorrections[key] ?? ''} /></label>
+                  {uploaded && (
+                    <div className={`reaction-import-summary ${uploaded.scientificallyComplete ? 'complete' : 'incomplete'}`}>
+                      <FileCheck2 size={14} />
+                      <span>{uploaded.filenames.join(' + ')} · {uploaded.energyKind} · {uploaded.energyEv.toFixed(6)} eV · {uploaded.status} / {uploaded.ionicConvergence}</span>
+                    </div>
+                  )}
+                </section>
+              )
+            })}
+            <section className="terminal-slab-row">
+              <strong>slab</strong>
+              <span>{tr('再生后的催化表面；由反应模板和 H₂/H₂O 参考态自动闭合，无需重复上传。', 'Regenerated catalyst surface; closed automatically from the reaction template and H₂/H₂O reservoirs—no duplicate upload is required.')}</span>
+              <span className="success-chip">{tr('模板自动闭合', 'Template-closed')}</span>
+            </section>
           </div>
           <div className="reservoir-grid">
             <label>G(H₂) (eV)<input onChange={(event) => setH2Energy(event.target.value)} type="number" value={h2Energy} /></label>
@@ -3189,11 +3944,11 @@ function App() {
             <label>{tr('电极标尺', 'Potential scale')}<select onChange={(event) => setReferenceElectrode(event.target.value as 'RHE' | 'SHE')} value={referenceElectrode}><option value="RHE">RHE</option><option value="SHE">SHE</option></select></label>
           </div>
           <button className="primary-button" disabled={!activeReactionTemplate || busy !== null} onClick={() => void calculateReactionAnalysis()} type="button"><ChartNoAxesCombined size={16} /> {tr('计算并绘制台阶图', 'Calculate and plot')}</button>
-          <small>{tr('绑定结果时自动检查 energy family；外部 H₂/H₂O 参考能和热化学校正始终显式显示。', 'Bound results are checked for a shared energy family; external H₂/H₂O references and corrections remain explicit.')}</small>
+          <small>{tr('绑定项目结果时自动检查 energy family；上传外部结果时无法自动确认计算协议是否一致，请确保泛函、POTCAR、ENCUT 和 KPOINTS 可比。外部 H₂/H₂O 参考能与热化学校正始终显式显示。', 'Project-bound results are checked for a shared energy family. For external uploads, protocol compatibility cannot be inferred automatically; ensure functional, POTCAR, ENCUT, and KPOINTS are comparable. H₂/H₂O references and thermochemical corrections remain explicit.')}</small>
         </article>
         <article className="diagram-card">
           <div className="card-heading"><div><span className="eyebrow">FREE-ENERGY LANDSCAPE</span><h3>{reactionTemplateId === 'her-che' ? 'HER' : 'OER'} · {referenceElectrode}</h3></div>{reactionAnalysis && <span className="model-badge">U = {reactionAnalysis.conditions.potential_volts.toFixed(2)} V · pH {reactionAnalysis.conditions.pH}</span>}</div>
-          <FreeEnergyDiagram analysis={reactionAnalysis} emptyLabel={tr('填入或绑定各状态能量，然后生成台阶图。', 'Enter or bind state energies, then generate the diagram.')} />
+          <FreeEnergyDiagram analysis={reactionAnalysis} emptyLabel={tr('绑定项目结果或上传各状态的 OUTCAR/OSZICAR，然后生成台阶图。', 'Bind project results or upload OUTCAR/OSZICAR for each state, then generate the diagram.')} />
           {reactionAnalysis && <div className="analysis-metrics"><div><span>{tr('势限制步骤', 'Potential-limiting step')}</span><strong>{reactionAnalysis.potential_limiting_step}</strong></div><div><span>{reactionTemplateId === 'her-che' ? '|ΔG(H*)|' : tr('限制电位', 'Limiting potential')}</span><strong>{formatNumber(reactionAnalysis.descriptor_eV ?? reactionAnalysis.limiting_potential_volts, 3)} {reactionTemplateId === 'her-che' ? 'eV' : 'V'}</strong></div><div><span>{tr('过电位', 'Overpotential')}</span><strong>{formatNumber(reactionAnalysis.overpotential_volts, 3)} V</strong></div></div>}
           {reactionAnalysis && <div className="step-table">{reactionAnalysis.step_free_energies_eV.map((step, index) => <div className={reactionAnalysis.potential_limiting_step === index + 1 ? 'limiting' : ''} key={index}><span>Step {index + 1}</span><strong>{formatNumber(step, 3)} eV</strong></div>)}</div>}
         </article>
@@ -3205,7 +3960,7 @@ function App() {
   void reviewResult
 
   return (
-    <div className="app-shell">
+    <div className={`app-shell ${activeView === 'workflow' ? 'workflow-focus' : ''}`}>
       <header className="topbar">
         <div className="brand">
           <div className="brand-mark"><Atom size={24} /></div>
@@ -3294,12 +4049,12 @@ function App() {
           <LayoutDashboard size={19} />
         </button>
         <button
-          className="rail-button"
-          onClick={() => setActiveView('projects')}
-          title="Artifact"
+          className={`rail-button ${activeView === 'experimental' ? 'active' : ''}`}
+          onClick={() => setActiveView('experimental')}
+          title={tr('实验约束建模', 'Experiment-informed modeling')}
           type="button"
         >
-          <Database size={19} />
+          <Microscope size={19} />
         </button>
         <button
           className={`rail-button ${activeView === 'runs' ? 'active' : ''}`}
@@ -3427,12 +4182,29 @@ function App() {
 
         <div className="workspace-content">
           {activeView === 'projects' && renderProjects()}
+          {activeView === 'experimental' && (
+            <ExperimentalModelingWorkbench
+              artifacts={artifacts}
+              onArtifactsChanged={refreshActiveProjectArtifacts}
+              onMessage={(tone, message) => setNotice({ tone, message })}
+              onOpenStructures={() => setActiveView('structure')}
+              projectId={currentProjectId}
+            />
+          )}
           {activeView === 'workflow' && renderWorkflow()}
           {activeView === 'structure' && renderStructure()}
           {activeView === 'protocol' && renderProtocol()}
           {activeView === 'runs' && renderRuns()}
           {activeView === 'results' && renderResults()}
           {activeView === 'analysis' && renderAnalysis()}
+          {activeView === 'campaigns' && (
+            <CampaignWorkbench
+              artifacts={artifacts}
+              onMessage={(tone, message) => setNotice({ tone, message })}
+              projectId={currentProjectId}
+              revisions={workflowRevisions}
+            />
+          )}
         </div>
       </main>
 

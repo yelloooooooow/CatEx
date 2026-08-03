@@ -396,4 +396,4 @@ __all__ = [
     "vasp544_incar_registry",
 ]
 
-__version__ = "0.27.0"
+__version__ = "0.33.0"

@@ -4,18 +4,34 @@ from __future__ import annotations
 
 import json
 import os
+import tempfile
 from pathlib import Path
 from typing import Annotated
 
 from fastapi import FastAPI, File, HTTPException, Response, UploadFile
 from fastapi.middleware.cors import CORSMiddleware
+from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel, ConfigDict, Field
 
 from catex import __version__
+from catex.mlip import (
+    ChgnetPreRelaxationConfig,
+    ChgnetPreRelaxationError,
+    ChgnetUnavailableError,
+)
 from catex.reactions.electrocatalysis import analyze_electrocatalysis, reaction_templates
+from catex.vasp import (
+    SUPPORTED_RESULT_FILES,
+    VaspResultDocumentError,
+    build_vasp_result_document,
+    parse_vasp_output,
+)
 from catex.vasp.thermochemistry import harmonic_thermochemistry
 from catex_app.analysis import EnergyAnalysisService
 from catex_app.calculations import CalculationServiceError, CalculationWorkspaceService
+from catex_app.campaigns import CampaignService
+from catex_app.chgnet import ChgnetPreRelaxationService, ChgnetRunner
+from catex_app.experimental_modeling import ExperimentalModelingService
 from catex_app.hpc import HpcWorkspaceService
 from catex_app.hpc_gateway import (
     HpcConnectionProfile,
@@ -25,6 +41,7 @@ from catex_app.hpc_gateway import (
 )
 from catex_app.projects import ProjectStore, ProjectStoreError
 from catex_app.reference_cases import ReferenceCaseService
+from catex_app.secure_store import CredentialStore
 from catex_app.services import (
     MAX_STRUCTURE_UPLOAD_BYTES,
     UploadRejected,
@@ -40,6 +57,29 @@ from catex_app.workflow import (
     node_registry_payload,
     validate_workflow,
 )
+from catex_app.workflow_runtime import WorkflowRuntimeService
+from catex_web.routes.experimental_modeling import create_experimental_modeling_router
+from catex_web.routes.platform import create_platform_router
+
+MAX_VASP_OUTPUT_UPLOAD_BYTES = 512 * 1024 * 1024
+_VASP_OUTPUT_FILENAMES = {"OUTCAR", "OSZICAR"}
+_VASP_RESULT_CANONICAL_NAMES = {name.upper(): name for name in SUPPORTED_RESULT_FILES}
+
+
+def _scrub_temporary_output_paths(value: object) -> object:
+    """Replace ephemeral server paths with portable artifact filenames."""
+
+    if isinstance(value, list):
+        return [_scrub_temporary_output_paths(item) for item in value]
+    if isinstance(value, dict):
+        scrubbed: dict[str, object] = {}
+        for key, item in value.items():
+            if key in {"path", "artifact_path"} and isinstance(item, str):
+                scrubbed[key] = Path(item).name
+            else:
+                scrubbed[key] = _scrub_temporary_output_paths(item)
+        return scrubbed
+    return value
 
 
 class PositionRequest(BaseModel):
@@ -55,6 +95,7 @@ class WorkflowNodeRequest(BaseModel):
     node_id: str = Field(min_length=1, max_length=128)
     type_id: str = Field(min_length=1, max_length=128)
     position: PositionRequest
+    parameters: dict[str, object] = Field(default_factory=dict)
 
 
 class WorkflowEdgeRequest(BaseModel):
@@ -132,6 +173,21 @@ class SelectiveDynamicsRequest(BaseModel):
     layer_tolerance_angstrom: float = Field(default=0.5, ge=0.01, le=5.0)
 
 
+class ChgnetPreRelaxationRequest(ArtifactPlanRequest):
+    model_config = ConfigDict(extra="forbid")
+
+    model_name: str = Field(default="0.3.0", pattern=r"^(0\.3\.0|r2scan)$")
+    optimizer: str = Field(default="FIRE", pattern=r"^(FIRE|BFGS|LBFGS)$")
+    fmax_eV_per_angstrom: float = Field(default=0.05, ge=0.005, le=1.0)
+    max_steps: int = Field(default=500, ge=1, le=5000)
+    relax_cell: bool = False
+    device: str = Field(default="auto", pattern=r"^(auto|cpu|cuda)$")
+
+    def config(self) -> ChgnetPreRelaxationConfig:
+        payload = self.model_dump(exclude={"artifact_id"})
+        return ChgnetPreRelaxationConfig(**payload)
+
+
 class HpcProfileRequest(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
@@ -188,6 +244,10 @@ class RemoteRunRequest(BaseModel):
 
     profile: HpcProfileRequest
     run_id: str = Field(min_length=1, max_length=64)
+
+
+class RemoteCancelRequest(RemoteRunRequest):
+    approved_cancel: bool
 
 
 class ResultPullRequest(RemoteRunRequest):
@@ -263,13 +323,21 @@ def _persistent_root(explicit: str | Path | None) -> Path:
 
 
 def create_app(
-    *, data_root: str | Path | None = None, hpc_gateway: HpcGateway | None = None
+    *,
+    data_root: str | Path | None = None,
+    hpc_gateway: HpcGateway | None = None,
+    chgnet_runner: ChgnetRunner | None = None,
+    credential_store: CredentialStore | None = None,
 ) -> FastAPI:
     store = ProjectStore(_persistent_root(data_root))
     calculations = CalculationWorkspaceService(store)
+    chgnet = ChgnetPreRelaxationService(store, chgnet_runner)
     hpc = HpcWorkspaceService(store, hpc_gateway or ParamikoHpcGateway())
     reference_cases = ReferenceCaseService(store, Path(__file__).resolve().parents[2])
     analysis = EnergyAnalysisService(store)
+    workflow_runtime = WorkflowRuntimeService(store)
+    campaigns = CampaignService(store)
+    experimental_modeling = ExperimentalModelingService(store, credential_store)
     application = FastAPI(
         title="CatEx Workbench API",
         version=__version__,
@@ -279,12 +347,16 @@ def create_app(
         CORSMiddleware,
         allow_origins=["http://127.0.0.1:5173", "http://localhost:5173"],
         allow_credentials=False,
-        allow_methods=["GET", "POST"],
+        allow_methods=["GET", "POST", "PUT", "PATCH", "DELETE"],
         allow_headers=["content-type"],
     )
+    application.include_router(create_platform_router(workflow_runtime, campaigns))
+    application.include_router(create_experimental_modeling_router(experimental_modeling))
 
     @application.get("/api/v1/capabilities")
     def capabilities() -> dict[str, object]:
+        chgnet_status = chgnet.capabilities()
+        experimental_modeling_status = experimental_modeling.capabilities()
         return {
             "schema_version": "catex.web-capabilities.v1",
             "catex_version": __version__,
@@ -292,7 +364,7 @@ def create_app(
             "hpc_enabled": True,
             "ssh_enabled": True,
             "hpc_default_active": False,
-            "credentials_persisted": False,
+            "credentials_persisted": bool(experimental_modeling_status["credentials_persisted"]),
             "project_persistence_enabled": True,
             "protocol_editor_enabled": True,
             "local_materialization_enabled": True,
@@ -301,8 +373,16 @@ def create_app(
             "scientific_acceptance_enabled": False,
             "result_first_enabled": True,
             "reaction_analysis_enabled": True,
+            "mlip_pre_relaxation_enabled": bool(chgnet_status["available"]),
+            "experimental_modeling_enabled": True,
+            "experimental_modeling": experimental_modeling_status,
+            "chgnet": chgnet_status,
             "max_structure_upload_bytes": MAX_STRUCTURE_UPLOAD_BYTES,
         }
+
+    @application.get("/api/v1/chgnet/capabilities")
+    def chgnet_runtime_capabilities() -> dict[str, object]:
+        return chgnet.capabilities()
 
     @application.get("/api/v1/workflows/registry")
     def workflow_registry() -> dict[str, object]:
@@ -325,6 +405,7 @@ def create_app(
                 type_id=item.type_id,
                 position_x=item.position.x,
                 position_y=item.position.y,
+                parameters=item.parameters,
             )
             for item in request.nodes
         )
@@ -394,6 +475,21 @@ def create_app(
         except (ProjectStoreError, UploadRejected) as error:
             raise HTTPException(status_code=400, detail=str(error)) from error
 
+    @application.post(
+        "/api/v1/projects/{project_id}/chgnet-pre-relaxations",
+        status_code=201,
+    )
+    def pre_relax_project_structure(
+        project_id: str,
+        request: ChgnetPreRelaxationRequest,
+    ) -> dict[str, object]:
+        try:
+            return chgnet.relax(project_id, request.artifact_id, request.config())
+        except ChgnetUnavailableError as error:
+            raise HTTPException(status_code=503, detail=str(error)) from error
+        except (ProjectStoreError, ChgnetPreRelaxationError, OSError, ValueError) as error:
+            raise HTTPException(status_code=400, detail=str(error)) from error
+
     @application.get("/api/v1/projects/{project_id}/structure-reviews/{artifact_id}")
     def get_structure_review(project_id: str, artifact_id: str) -> dict[str, object]:
         try:
@@ -444,6 +540,7 @@ def create_app(
                 type_id=item.type_id,
                 position_x=item.position.x,
                 position_y=item.position.y,
+                parameters=item.parameters,
             )
             for item in request.nodes
         )
@@ -626,6 +723,23 @@ def create_app(
         except (ProjectStoreError, HpcGatewayError, OSError, ValueError) as error:
             raise HTTPException(status_code=400, detail=str(error)) from error
 
+    @application.post("/api/v1/projects/{project_id}/remote-cancel", status_code=201)
+    def cancel_remote_run(
+        project_id: str,
+        request: RemoteCancelRequest,
+    ) -> dict[str, object]:
+        try:
+            return hpc.cancel(
+                project_id,
+                request.run_id,
+                request.profile.profile(),
+                approved_cancel=request.approved_cancel,
+            )
+        except PermissionError as error:
+            raise HTTPException(status_code=403, detail=str(error)) from error
+        except (ProjectStoreError, HpcGatewayError, OSError, ValueError) as error:
+            raise HTTPException(status_code=400, detail=str(error)) from error
+
     @application.post("/api/v1/projects/{project_id}/remote-results", status_code=201)
     def pull_remote_results(project_id: str, request: ResultPullRequest) -> dict[str, object]:
         try:
@@ -731,6 +845,133 @@ def create_app(
         except UploadRejected as error:
             raise HTTPException(status_code=400, detail=str(error)) from error
 
+    @application.post("/api/v1/vasp-output/parse")
+    async def parse_uploaded_vasp_output(
+        files: Annotated[
+            list[UploadFile],
+            File(description="One or both of OUTCAR and OSZICAR"),
+        ],
+    ) -> dict[str, object]:
+        """Parse user-selected VASP outputs ephemerally without retaining uploads."""
+
+        if not 1 <= len(files) <= 2:
+            raise HTTPException(status_code=400, detail="Upload one or both of OUTCAR and OSZICAR")
+        normalized: list[tuple[UploadFile, str]] = []
+        seen: set[str] = set()
+        for upload in files:
+            filename = upload.filename or ""
+            if filename != Path(filename).name or "\\" in filename:
+                raise HTTPException(
+                    status_code=400,
+                    detail="VASP output filenames must be basenames",
+                )
+            canonical = filename.upper()
+            if canonical not in _VASP_OUTPUT_FILENAMES:
+                raise HTTPException(
+                    status_code=400,
+                    detail="Only files named OUTCAR and OSZICAR are supported",
+                )
+            if canonical in seen:
+                raise HTTPException(status_code=400, detail=f"Duplicate uploaded file: {canonical}")
+            seen.add(canonical)
+            normalized.append((upload, canonical))
+
+        try:
+            with tempfile.TemporaryDirectory(prefix="catex-output-upload-") as temporary:
+                root = Path(temporary)
+                total_bytes = 0
+                for upload, canonical in normalized:
+                    with (root / canonical).open("xb") as destination:
+                        while chunk := await upload.read(1024 * 1024):
+                            total_bytes += len(chunk)
+                            if total_bytes > MAX_VASP_OUTPUT_UPLOAD_BYTES:
+                                raise HTTPException(
+                                    status_code=413,
+                                    detail="Combined VASP output upload exceeds the 512 MiB limit",
+                                )
+                            destination.write(chunk)
+                payload = parse_vasp_output(root).to_dict()
+                payload["directory"] = "browser-upload"
+                payload["upload"] = {
+                    "filenames": [canonical for _, canonical in normalized],
+                    "retained": False,
+                    "hpc_contacted": False,
+                }
+                return _scrub_temporary_output_paths(payload)  # type: ignore[return-value]
+        finally:
+            for upload, _ in normalized:
+                await upload.close()
+
+    @application.post("/api/v1/vasp-results/parse")
+    async def parse_uploaded_vasp_results(
+        files: Annotated[
+            list[UploadFile],
+            File(description="Supported VASP output and analysis artifacts"),
+        ],
+    ) -> dict[str, object]:
+        """Build one ephemeral result document from common VASP artifacts."""
+
+        if not 1 <= len(files) <= len(SUPPORTED_RESULT_FILES):
+            raise HTTPException(
+                status_code=400,
+                detail="Upload between 1 and 8 supported VASP result files",
+            )
+        normalized: list[tuple[UploadFile, str]] = []
+        seen: set[str] = set()
+        for upload in files:
+            filename = upload.filename or ""
+            if filename != Path(filename).name or "\\" in filename:
+                raise HTTPException(
+                    status_code=400,
+                    detail="VASP result filenames must be basenames",
+                )
+            canonical = _VASP_RESULT_CANONICAL_NAMES.get(filename.upper())
+            if canonical is None:
+                raise HTTPException(
+                    status_code=400,
+                    detail=(
+                        "Supported names are OUTCAR, OSZICAR, CONTCAR, vasprun.xml, "
+                        "XDATCAR, CHGCAR, LOCPOT, and ELFCAR"
+                    ),
+                )
+            if canonical in seen:
+                raise HTTPException(
+                    status_code=400,
+                    detail=f"Duplicate uploaded file: {canonical}",
+                )
+            seen.add(canonical)
+            normalized.append((upload, canonical))
+
+        try:
+            with tempfile.TemporaryDirectory(prefix="catex-result-document-") as temporary:
+                root = Path(temporary)
+                total_bytes = 0
+                for upload, canonical in normalized:
+                    with (root / canonical).open("xb") as destination:
+                        while chunk := await upload.read(1024 * 1024):
+                            total_bytes += len(chunk)
+                            if total_bytes > MAX_VASP_OUTPUT_UPLOAD_BYTES:
+                                raise HTTPException(
+                                    status_code=413,
+                                    detail=(
+                                        "Combined VASP result upload exceeds the 512 MiB limit"
+                                    ),
+                                )
+                            destination.write(chunk)
+                payload = build_vasp_result_document(root)
+                payload["directory"] = "browser-upload"
+                payload["upload"] = {
+                    "filenames": [canonical for _, canonical in normalized],
+                    "retained": False,
+                    "hpc_contacted": False,
+                }
+                return _scrub_temporary_output_paths(payload)  # type: ignore[return-value]
+        except VaspResultDocumentError as error:
+            raise HTTPException(status_code=400, detail=str(error)) from error
+        finally:
+            for upload, _ in normalized:
+                await upload.close()
+
     @application.post("/api/v1/thermochemistry/harmonic")
     def calculate_harmonic_thermochemistry(
         request: HarmonicThermochemistryRequest,
@@ -783,6 +1024,16 @@ def create_app(
     @application.get("/api/v1/demo/vasp-output")
     def demo_vasp_output() -> dict[str, object]:
         return parse_demo_vasp_output()
+
+    if os.environ.get("CATEX_SERVE_WEB") == "1":
+        web_dist = Path(__file__).resolve().parents[2] / "apps" / "web" / "dist"
+        if not (web_dist / "index.html").is_file():
+            raise RuntimeError("CATEX_SERVE_WEB=1 requires a built apps/web/dist directory")
+        application.mount(
+            "/",
+            StaticFiles(directory=web_dist, html=True),
+            name="catex-workbench",
+        )
 
     return application
 
