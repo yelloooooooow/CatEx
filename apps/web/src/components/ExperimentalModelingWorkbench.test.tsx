@@ -7,6 +7,7 @@ import type { ExperimentalModelingCapabilities } from '../types'
 import {
   detectExperimentalEvidenceKind,
   ExperimentalModelingWorkbench,
+  reconcileAutoInterpretedElements,
 } from './ExperimentalModelingWorkbench'
 
 const mocks = vi.hoisted(() => ({
@@ -207,6 +208,21 @@ describe('experimental credential editor', () => {
     expect(detectExperimentalEvidenceKind('ICP-OES: Ni 62±2 at.%, Mo 38±2 at.%')).toBe('icp')
     expect(detectExperimentalEvidenceKind('XPS拟合显示Mo–O组分占60%。')).toBe('xps')
     expect(detectExperimentalEvidenceKind('HRTEM晶面间距d=0.208 nm。')).toBe('tem')
+  })
+
+  it('removes stale elements from a replaced automatic interpretation', () => {
+    expect(reconcileAutoInterpretedElements(
+      ['Ni', 'Mo', 'F', 'H', 'P'],
+      ['F', 'H', 'P'],
+      [],
+      ['Ni', 'Mo'],
+    )).toEqual(['Ni', 'Mo'])
+    expect(reconcileAutoInterpretedElements(
+      ['Ni', 'Mo', 'O'],
+      ['Mo', 'O'],
+      ['Mo'],
+      ['Ni', 'O'],
+    )).toEqual(['Ni', 'Mo', 'O'])
   })
 
   it('shows qualitative phase extraction as a usable interpretation', async () => {

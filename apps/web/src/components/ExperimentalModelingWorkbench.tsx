@@ -295,6 +295,24 @@ function hasLegacyPhaseInterpretation(item: ExperimentalEvidenceInput): boolean 
     && metadataStrings(item.metadata, 'reported_phase_formulas').length > 0
 }
 
+export function reconcileAutoInterpretedElements(
+  allowedElements: string[],
+  previousInterpretedElements: string[],
+  replacementElements: string[],
+  elementsSupportedElsewhere: string[],
+): string[] {
+  const previous = new Set(previousInterpretedElements.map((element) => element.toLowerCase()))
+  const retained = new Set(
+    [...replacementElements, ...elementsSupportedElsewhere].map((element) => element.toLowerCase()),
+  )
+  return [...new Set([
+    ...allowedElements.filter((element) => (
+      !previous.has(element.toLowerCase()) || retained.has(element.toLowerCase())
+    )),
+    ...replacementElements,
+  ])]
+}
+
 function evidenceFindingLabels(
   item: ExperimentalEvidenceInput,
   spec: ExperimentalSpec,
@@ -919,9 +937,21 @@ export function ExperimentalModelingWorkbench({
           }
         } else spacings.push(constraint)
       }
+      const elementsSupportedElsewhere = [
+        ...spec.evidence
+          .filter((record) => record.evidence_id !== item.evidence_id)
+          .flatMap((record) => metadataStrings(record.metadata, 'interpreted_elements')),
+        ...composition.map((record) => record.element),
+        ...environments.flatMap((record) => [record.element, record.neighbor_element]),
+      ]
       const nextSpec: ExperimentalSpec = {
         ...spec,
-        allowed_elements: [...new Set([...spec.allowed_elements, ...extraction.suggested_elements])],
+        allowed_elements: reconcileAutoInterpretedElements(
+          spec.allowed_elements,
+          metadataStrings(item.metadata, 'interpreted_elements'),
+          extraction.suggested_elements,
+          elementsSupportedElsewhere,
+        ),
         evidence: spec.evidence.map((record) => (
           record.evidence_id === item.evidence_id ? updatedEvidence : record
         )),
