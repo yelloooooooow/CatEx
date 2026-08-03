@@ -297,6 +297,7 @@ def create_experimental_modeling_router(
         except (ProjectStoreError, ExperimentalModelingError) as error:
             raise _api_error(error, missing_status=404) from error
 
+    @router.post("/projects/{project_id}/experimental-modeling/evidence/extract")
     @router.post("/projects/{project_id}/experimental-modeling/evidence-extraction")
     def extract_evidence_without_required_file(
         project_id: str,

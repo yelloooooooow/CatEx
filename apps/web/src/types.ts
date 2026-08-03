@@ -995,8 +995,16 @@ export interface ExperimentalCandidateAssessment {
   formula: string
   num_sites: number
   valid: boolean
-  evidence_score: number
-  phase_support_score: number | null
+  modality_support: Array<{
+    modality: ExperimentalEvidenceKind
+    domain: 'parent' | 'surface' | 'local'
+    score: number
+    check_ids: string[]
+    aggregation: 'geometric_mean'
+  }>
+  parent_support: number | null
+  surface_support: number | null
+  local_support: number | null
   xrd_directly_applicable: boolean
   evidence_checks: ExperimentalEvidenceCheck[]
   transformation_sha256s: string[]

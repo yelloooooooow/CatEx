@@ -892,6 +892,11 @@ button:focus-visible {
   font-size: 9px;
 }
 
+.experimental-candidate-list .candidate-support-summary {
+  color: var(--mint);
+  font: 500 10px 'DM Mono', monospace;
+}
+
 .experimental-candidate-viewer {
   display: flex;
   min-height: 460px;
@@ -900,6 +905,66 @@ button:focus-visible {
 
 .experimental-candidate-viewer .viewer-stage {
   min-height: 340px;
+}
+
+.experimental-support-panel {
+  display: grid;
+  gap: 9px;
+  margin-top: 12px;
+  padding: 12px;
+  border: 1px solid rgba(98, 213, 173, 0.25);
+  border-radius: 10px;
+  background: rgba(98, 213, 173, 0.035);
+}
+
+.experimental-support-heading {
+  display: flex;
+  align-items: flex-end;
+  justify-content: space-between;
+  gap: 14px;
+}
+
+.experimental-support-heading h4 {
+  margin: 3px 0 0;
+}
+
+.experimental-support-heading > small,
+.experimental-support-panel > p {
+  margin: 0;
+  color: var(--muted);
+  font-size: 10px;
+  line-height: 1.5;
+}
+
+.experimental-support-heading > small {
+  max-width: 280px;
+  text-align: right;
+}
+
+.experimental-support-vector {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 7px;
+}
+
+.experimental-support-vector article {
+  display: grid;
+  gap: 4px;
+  padding: 9px 10px;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  background: rgba(0, 0, 0, 0.12);
+}
+
+.experimental-support-vector span,
+.experimental-support-vector small {
+  color: var(--muted);
+  font-size: 9px;
+}
+
+.experimental-support-vector strong {
+  color: var(--mint);
+  font: 600 17px 'DM Mono', monospace;
 }
 
 .experimental-constraint-editor {
@@ -2395,6 +2460,10 @@ button:disabled {
   overflow: hidden auto;
 }
 
+.structure-workbench {
+  scrollbar-gutter: stable;
+}
+
 .protocol-workbench,
 .run-workbench {
   height: 100%;
@@ -3049,14 +3118,15 @@ button:disabled {
 
 .structure-grid {
   display: grid;
-  grid-template-columns: minmax(430px, 1fr) 220px;
+  grid-template-columns: minmax(0, 1fr) minmax(220px, 260px);
   gap: 12px;
-  height: calc(100% - 79px);
+  align-items: stretch;
   padding: 12px;
 }
 
 .large-viewer-card {
-  min-height: 430px;
+  min-width: 0;
+  min-height: 620px;
   overflow: hidden;
   border: 1px solid #29483e;
   border-radius: 12px;
@@ -3065,7 +3135,7 @@ button:disabled {
 
 .metrics-column {
   display: grid;
-  grid-template-rows: repeat(4, 1fr);
+  grid-auto-rows: minmax(126px, auto);
   gap: 9px;
 }
 
@@ -3262,10 +3332,48 @@ button:disabled {
 .viewer-atom-detail strong { color: var(--amber); }
 .viewer-atom-detail.muted { display: flex; border-left-color: var(--line); background: transparent; }
 
-.large-viewer-card .viewer-shell { min-height: 430px; }
-.large-viewer-card .viewer-stage { min-height: 300px; flex: 1; }
+.large-viewer-card .viewer-shell { min-height: 620px; }
+.large-viewer-card .viewer-stage { height: clamp(420px, 56vh, 680px); min-height: 420px; flex: 1; }
 .constraint-viewer-card .viewer-shell,
 .constraint-viewer-card .viewer-stage { height: 100%; min-height: 100%; }
+
+@media (max-width: 1500px) {
+  .structure-grid {
+    grid-template-columns: minmax(0, 1fr);
+  }
+
+  .metrics-column {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+    grid-auto-rows: minmax(112px, auto);
+  }
+}
+
+@media (max-width: 760px) {
+  .large-viewer-card,
+  .large-viewer-card .viewer-shell {
+    min-height: 500px;
+  }
+
+  .large-viewer-card .viewer-stage {
+    height: 360px;
+    min-height: 360px;
+  }
+
+  .metrics-column,
+  .experimental-support-vector {
+    grid-template-columns: minmax(0, 1fr);
+  }
+
+  .experimental-support-heading {
+    align-items: flex-start;
+    flex-direction: column;
+  }
+
+  .experimental-support-heading > small {
+    max-width: none;
+    text-align: left;
+  }
+}
 
 .viewer-overlay {
   position: absolute;

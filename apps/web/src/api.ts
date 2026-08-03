@@ -54,6 +54,16 @@ import type {
 } from './types'
 import type { WorkflowValidationRequest } from './workflow'
 
+export class ApiError extends Error {
+  readonly status: number
+
+  constructor(message: string, status: number) {
+    super(message)
+    this.name = 'ApiError'
+    this.status = status
+  }
+}
+
 async function requestJson<T>(url: string, init?: RequestInit): Promise<T> {
   const response = await fetch(url, init)
   if (!response.ok) {
@@ -65,7 +75,7 @@ async function requestJson<T>(url: string, init?: RequestInit): Promise<T> {
         : typeof value?.message === 'string'
           ? value.message
           : `Request failed (${response.status})`
-    throw new Error(message)
+    throw new ApiError(message, response.status)
   }
   return response.json() as Promise<T>
 }
@@ -217,7 +227,7 @@ export const api = {
       instrument_info: string
     },
   ) => requestJson<ExperimentalEvidenceExtraction>(
-    `/api/v1/projects/${projectId}/experimental-modeling/evidence-extraction`,
+    `/api/v1/projects/${projectId}/experimental-modeling/evidence/extract`,
     {
       method: 'POST',
       headers: { 'content-type': 'application/json' },

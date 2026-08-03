@@ -6,6 +6,7 @@ import type { ViewerPayload } from '../types'
 
 interface StructureViewerProps {
   structure: ViewerPayload | null
+  atomScale?: number
   fixedAtomIndices1Based?: number[]
   mobileAtomIndices1Based?: number[]
   focusedAtomIndex1Based?: number | null
@@ -80,6 +81,7 @@ function synchronizeConstraintVisualization(
 
 export function StructureViewer({
   structure,
+  atomScale = 0.58,
   fixedAtomIndices1Based = EMPTY_ATOM_INDICES,
   mobileAtomIndices1Based = EMPTY_ATOM_INDICES,
   focusedAtomIndex1Based = null,
@@ -96,6 +98,7 @@ export function StructureViewer({
   const [internalShowAtomIndices, setInternalShowAtomIndices] = useState(false)
   const effectiveFocusedAtom = focusedAtomIndex1Based ?? inspectedAtomIndex1Based
   const effectiveShowAtomIndices = showAtomIndices || internalShowAtomIndices
+  const effectiveAtomScale = Math.min(1.2, Math.max(0.3, atomScale))
   const elementCounts = useMemo(() => {
     const counts = new Map<string, number>()
     for (const element of structure?.species ?? []) {
@@ -147,7 +150,7 @@ export function StructureViewer({
           viewerConfig: {
             backgroundColor: '#081713',
             modelStyle: 1,
-            atomScale: 0.48,
+            atomScale: effectiveAtomScale,
             showBondedAtoms: true,
             bondSettings: {
               hideLongBonds: true,
@@ -166,7 +169,7 @@ export function StructureViewer({
           {
             backgroundColor: '#081713',
             modelStyle: 1,
-            atomScale: 0.48,
+            atomScale: effectiveAtomScale,
             showBondedAtoms: true,
           },
           { redraw: 'full' },
@@ -213,7 +216,7 @@ export function StructureViewer({
     }
   // Visual constraint props are synchronized by the effect below without rebuilding WebGL.
   // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [structure, tr])
+  }, [effectiveAtomScale, structure, tr])
 
   useEffect(() => {
     if (!structure || !viewerRef.current) return

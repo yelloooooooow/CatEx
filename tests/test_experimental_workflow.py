@@ -227,7 +227,11 @@ def test_inference_without_xrd_abstains_and_recommends_low_cost_evidence(tmp_pat
     assert run.report.status is InferenceStatus.INSUFFICIENT_EVIDENCE
     assert run.report.claim_ceiling is ClaimLevel.CANDIDATE_ONLY
     assert run.report.phase_search is None
-    assert run.report.candidate_assessments[0].evidence_score == pytest.approx(0.15)
+    assessment = run.report.candidate_assessments[0]
+    assert assessment.modality_support == ()
+    assert assessment.parent_support is None
+    assert assessment.surface_support is None
+    assert assessment.local_support is None
     assert run.report.has_errors is False
     assert any("XRD/GIXRD" in item for item in run.report.recommended_next_experiments)
     assert any(
@@ -283,6 +287,7 @@ def test_inference_can_review_candidates_from_composition_without_xrd() -> None:
     assert run.report.phase_search is None
     checks = run.report.candidate_assessments[0].evidence_checks
     assert any(item.kind == "composition" and item.status == "within_range" for item in checks)
+    assert run.report.candidate_assessments[0].parent_support == pytest.approx(1.0)
 
 
 def test_inference_can_review_candidates_from_tem_spacing_without_xrd() -> None:
@@ -294,9 +299,7 @@ def test_inference_can_review_candidates_from_tem_spacing_without_xrd() -> None:
     spec = ExperimentSpec(
         sample_id="tem-only",
         evidence=(evidence,),
-        lattice_spacing_constraints=(
-            LatticeSpacingConstraint(2.032, 0.05, ("tem-1",)),
-        ),
+        lattice_spacing_constraints=(LatticeSpacingConstraint(2.032, 0.05, ("tem-1",)),),
         allowed_elements=("Ni",),
     )
     registry = ProviderRegistry(
@@ -321,6 +324,7 @@ def test_inference_can_review_candidates_from_tem_spacing_without_xrd() -> None:
         item.kind == "tem" and item.status == "within_range"
         for item in run.report.candidate_assessments[0].evidence_checks
     )
+    assert run.report.candidate_assessments[0].local_support is not None
 
 
 class _InvalidRecipePlanner:

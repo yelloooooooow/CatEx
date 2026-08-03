@@ -298,15 +298,22 @@ pH correction 为零，因为 pH 已吸收到 RHE potential scale；这不表示
 | parsed XRD pattern | `catex.xrd-pattern.v1` |
 | phase-search report | `catex.phase-search.v1` |
 | candidate plan | `catex.candidate-plan.v1` |
-| candidate assessment | `catex.candidate-assessment.v1` |
-| modeling report | `catex.experimental-modeling-report.v1` |
+| candidate assessment | `catex.candidate-assessment.v2` |
+| modeling report | `catex.experimental-modeling-report.v2` |
 | materialization report | `catex.candidate-materialization.v1` |
 
 Evidence records identify local artifacts by basename, SHA-256, and byte size;
-runtime paths are not serialized. Evidence scores are ranking quantities, not
-calibrated posterior probabilities. Multiphase contributions are explicitly not
-mass or volume fractions. Surface candidates inherit parent-phase evidence and
-cannot raise the claim ceiling above the evidence-supported bulk phase family.
+runtime paths are not serialized. Support scores are ranking quantities, not
+calibrated posterior probabilities. Hard evidence only eliminates incompatible
+candidates, context evidence is not scored, and soft checks are first aggregated
+within each measurement modality. XRD/ICP contribute to `parent_support`, XPS to
+`surface_support`, and TEM/EDS to `local_support`. Missing support domains remain
+unknown rather than becoming zero. Representative candidates are the Pareto
+non-dominated set over the available support domains; deterministic crowding
+distance is used only when that frontier exceeds the configured output limit.
+Multiphase contributions are explicitly not mass or volume fractions. Surface
+candidates inherit parent-phase evidence and cannot raise the claim ceiling above
+the evidence-supported bulk phase family.
 
 Candidate recipes contain only an allowlisted operation enum and finite
 JSON-compatible parameters. The optional GPT planner must return known evidence

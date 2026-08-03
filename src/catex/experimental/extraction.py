@@ -376,9 +376,7 @@ def extract_characterization_summary(
             scale = 10.0 if match.group(3).lower() == "nm" else 1.0
             spacing = float(match.group(1)) * scale
             tolerance = (
-                float(match.group(2)) * scale
-                if match.group(2)
-                else max(0.03, spacing * 0.02)
+                float(match.group(2)) * scale if match.group(2) else max(0.03, spacing * 0.02)
             )
             spacings.append(
                 {

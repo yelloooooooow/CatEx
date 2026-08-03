@@ -2809,7 +2809,7 @@ function App() {
             if (scrollArea instanceof HTMLElement) scrollArea.scrollTop += event.deltaY
           }}
         >
-          <StructureViewer structure={structure?.viewer ?? null} />
+          <StructureViewer atomScale={0.72} structure={structure?.viewer ?? null} />
         </div>
         <div className="metrics-column">
           <article className="metric-card feature-metric">

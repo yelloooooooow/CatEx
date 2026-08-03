@@ -40,7 +40,7 @@ def test_web_experimental_modeling_review_and_materialization(tmp_path: Path) ->
         )
         evidence_id = evidence.json()["evidence_artifact_id"]
         extracted = client.post(
-            f"/api/v1/projects/{project_id}/experimental-modeling/evidence-extraction",
+            f"/api/v1/projects/{project_id}/experimental-modeling/evidence/extract",
             json={
                 "evidence_id": "composition",
                 "evidence_artifact_id": evidence_id,

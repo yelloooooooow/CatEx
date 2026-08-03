@@ -1,6 +1,7 @@
 import { cleanup, fireEvent, render, screen, waitFor } from '@testing-library/react'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 
+import { ApiError } from '../api'
 import { I18nProvider } from '../i18n'
 import type { ExperimentalModelingCapabilities } from '../types'
 import { ExperimentalModelingWorkbench } from './ExperimentalModelingWorkbench'
@@ -10,6 +11,8 @@ const mocks = vi.hoisted(() => ({
   experimentalRuns: vi.fn(),
   experimentalRun: vi.fn(),
   experimentalReviews: vi.fn(),
+  extractEvidence: vi.fn(),
+  saveSpec: vi.fn(),
 }))
 
 vi.mock('./StructureViewer', () => ({
@@ -71,18 +74,33 @@ const capabilities: ExperimentalModelingCapabilities = {
   credentials_persisted: true,
 }
 
-vi.mock('../api', () => ({
-  api: {
-    experimentalModelingCapabilities: vi.fn(async () => capabilities),
-    experimentalEvidence: vi.fn(async () => []),
-    experimentalSpec: vi.fn(async () => null),
-    experimentalCatalogs: vi.fn(async () => []),
-    experimentalRuns: mocks.experimentalRuns,
-    experimentalRun: mocks.experimentalRun,
-    experimentalReviews: mocks.experimentalReviews,
-    saveExperimentalCredential: mocks.saveCredential,
-  },
-}))
+vi.mock('../api', () => {
+  class MockApiError extends Error {
+    readonly status: number
+
+    constructor(message: string, status: number) {
+      super(message)
+      this.status = status
+    }
+  }
+
+  return {
+    ApiError: MockApiError,
+    api: {
+      experimentalModelingCapabilities: vi.fn(async () => capabilities),
+      experimentalEvidence: vi.fn(async () => []),
+      experimentalSpec: vi.fn(async () => null),
+      experimentalCatalogs: vi.fn(async () => []),
+      experimentalRuns: mocks.experimentalRuns,
+      experimentalRun: mocks.experimentalRun,
+      experimentalReviews: mocks.experimentalReviews,
+      saveExperimentalCredential: mocks.saveCredential,
+      extractExperimentalEvidence: mocks.extractEvidence,
+      saveExperimentalSpec: mocks.saveSpec,
+      addExperimentalEvidence: vi.fn(),
+    },
+  }
+})
 
 describe('experimental credential editor', () => {
   afterEach(() => cleanup())
@@ -116,6 +134,19 @@ describe('experimental credential editor', () => {
         },
       },
     })
+    mocks.extractEvidence.mockReset()
+    mocks.extractEvidence.mockResolvedValue({
+      schema_version: 'catex.experimental-evidence-extraction.v1',
+      evidence_id: 'xrd-test',
+      metadata: {},
+      composition_constraints: [],
+      local_environment_constraints: [],
+      lattice_spacing_constraints: [],
+      suggested_elements: [],
+      notices: [],
+    })
+    mocks.saveSpec.mockReset()
+    mocks.saveSpec.mockResolvedValue({ spec_revision_id: 'spec-test' })
   })
 
   it('uses a password field, clears it on submit, and never writes browser storage', async () => {
@@ -199,6 +230,33 @@ describe('experimental credential editor', () => {
     expect(screen.getByText(/Ni · 45\.0–75\.0% · Surface \(XPS\)/)).toBeInTheDocument()
   })
 
+  it('saves entered evidence when an older backend returns method not allowed', async () => {
+    const onMessage = vi.fn()
+    mocks.extractEvidence.mockRejectedValue(new ApiError('Method Not Allowed', 405))
+    render(
+      <I18nProvider>
+        <ExperimentalModelingWorkbench
+          artifacts={[]}
+          onArtifactsChanged={vi.fn()}
+          onMessage={onMessage}
+          onOpenStructures={vi.fn()}
+          projectId="project-1"
+        />
+      </I18nProvider>,
+    )
+
+    fireEvent.change(await screen.findByLabelText('Brief conclusion (optional)'), {
+      target: { value: 'All peaks belong to Ni4Mo.' },
+    })
+    fireEvent.click(screen.getByRole('button', { name: 'Add and extract' }))
+
+    await waitFor(() => expect(mocks.saveSpec).toHaveBeenCalled())
+    expect(onMessage).toHaveBeenCalledWith(
+      'warning',
+      expect.stringContaining('restart CatEx'),
+    )
+  })
+
   it('shows read-only candidate structure and clicked atom details', async () => {
     mocks.experimentalRuns.mockResolvedValue([{
       run_id: 'model-run-test',
@@ -228,7 +286,10 @@ describe('experimental credential editor', () => {
           formula: 'NiMo',
           model_kind: 'bulk',
           num_sites: 2,
-          evidence_score: 0.9,
+          modality_support: [],
+          parent_support: 0.9,
+          surface_support: null,
+          local_support: null,
           parent_reference_key: 'project:ni-mo',
           structure_sha256: 'b'.repeat(64),
           valid: true,

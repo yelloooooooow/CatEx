@@ -95,6 +95,14 @@ class EvidenceRole(StrEnum):
     CONTEXT = "context"
 
 
+class SupportDomain(StrEnum):
+    """Independent objective axes used for candidate comparison."""
+
+    PARENT = "parent"
+    SURFACE = "surface"
+    LOCAL = "local"
+
+
 class CompositionScope(StrEnum):
     """Spatial scope represented by one composition constraint."""
 
@@ -688,6 +696,37 @@ class StructuralHypothesis:
 
 
 @dataclass(frozen=True, slots=True)
+class ModalitySupport:
+    """One soft-evidence modality aggregated before Pareto comparison."""
+
+    modality: EvidenceKind
+    domain: SupportDomain
+    score: float
+    check_ids: tuple[str, ...]
+    aggregation: str = "geometric_mean"
+
+    def __post_init__(self) -> None:
+        if not math.isfinite(self.score) or not 0 <= self.score <= 1:
+            raise ValueError("modality support score must be in [0, 1]")
+        object.__setattr__(
+            self,
+            "check_ids",
+            _identifiers(self.check_ids, field_name="check_ids"),
+        )
+        if self.aggregation != "geometric_mean":
+            raise ValueError("unsupported modality aggregation")
+
+    def to_dict(self) -> dict[str, Any]:
+        return {
+            "modality": self.modality.value,
+            "domain": self.domain.value,
+            "score": self.score,
+            "check_ids": list(self.check_ids),
+            "aggregation": self.aggregation,
+        }
+
+
+@dataclass(frozen=True, slots=True)
 class CandidateAssessment:
     """Serializable assessment of one generated runtime structure."""
 
@@ -700,13 +739,15 @@ class CandidateAssessment:
     formula: str
     num_sites: int
     valid: bool
-    evidence_score: float
-    phase_support_score: float | None
+    modality_support: tuple[ModalitySupport, ...]
+    parent_support: float | None
+    surface_support: float | None
+    local_support: float | None
     xrd_directly_applicable: bool
     evidence_checks: tuple[EvidenceCheck, ...]
     transformation_sha256s: tuple[str, ...]
     diagnostics: tuple[Diagnostic, ...]
-    schema_version: str = "catex.candidate-assessment.v1"
+    schema_version: str = "catex.candidate-assessment.v2"
 
     def __post_init__(self) -> None:
         for name in (
@@ -718,10 +759,10 @@ class CandidateAssessment:
             object.__setattr__(self, name, _identifier(getattr(self, name), field_name=name))
         if _SHA256.fullmatch(self.structure_sha256) is None:
             raise ValueError("structure_sha256 must be a lowercase SHA256 digest")
-        if not math.isfinite(self.evidence_score):
-            raise ValueError("evidence_score must be finite")
-        if self.phase_support_score is not None and not math.isfinite(self.phase_support_score):
-            raise ValueError("phase_support_score must be finite when present")
+        for name in ("parent_support", "surface_support", "local_support"):
+            value = getattr(self, name)
+            if value is not None and (not math.isfinite(value) or not 0 <= value <= 1):
+                raise ValueError(f"{name} must be in [0, 1] when present")
         if self.num_sites <= 0:
             raise ValueError("num_sites must be positive")
 
@@ -737,8 +778,10 @@ class CandidateAssessment:
             "formula": self.formula,
             "num_sites": self.num_sites,
             "valid": self.valid,
-            "evidence_score": self.evidence_score,
-            "phase_support_score": self.phase_support_score,
+            "modality_support": [item.to_dict() for item in self.modality_support],
+            "parent_support": self.parent_support,
+            "surface_support": self.surface_support,
+            "local_support": self.local_support,
             "xrd_directly_applicable": self.xrd_directly_applicable,
             "evidence_checks": [item.to_dict() for item in self.evidence_checks],
             "transformation_sha256s": list(self.transformation_sha256s),

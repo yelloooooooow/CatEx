@@ -19,7 +19,7 @@ import {
 } from 'lucide-react'
 import { useEffect, useMemo, useState } from 'react'
 
-import { api } from '../api'
+import { api, ApiError } from '../api'
 import { useI18n } from '../i18n'
 import type {
   ExperimentalCandidateReview,
@@ -27,6 +27,7 @@ import type {
   ExperimentalCompositionConstraint,
   ExperimentalEvidenceArtifact,
   ExperimentalEvidenceCheck,
+  ExperimentalEvidenceExtraction,
   ExperimentalEvidenceInput,
   ExperimentalEvidenceKind,
   ExperimentalLatticeSpacingConstraint,
@@ -150,6 +151,7 @@ const EXTRACTION_NOTICE_LABELS: Record<string, string> = {
   'No fitted XPS peak table was recognized; the raw spectrum was retained without automatic oxidation-state assignment.': '没有识别到 XPS 拟合峰表；原始谱图已保留，但不会自动指定氧化态。',
   'A TEM image alone is not converted into a lattice spacing; add a measured d-spacing or a table.': '不会仅凭 TEM 图片自动测量晶格间距；请补充已测量的 d 值或结果表。',
   'No composition table was recognized; add element ranges manually or use element/value/unit columns.': '没有识别到组成表；可手动补充范围，或使用 element / value / unit 列。',
+  'Automatic extraction is unavailable in the running backend; the file and entered notes were saved without blocking your work.': '当前运行中的后端不支持自动提取；文件和已填写信息仍已保存，不会阻止继续工作。请重启 CatEx 以启用自动提取。',
 }
 
 const DEFAULT_SPEC: ExperimentalSpec = {
@@ -601,15 +603,25 @@ export function ExperimentalModelingWorkbench({
       const extractable = new Set<ExperimentalEvidenceKind>([
         'xrd', 'gixrd', 'icp', 'eds', 'xps', 'tem',
       ])
-      const extraction = extractable.has(evidenceKind)
-        ? await api.extractExperimentalEvidence(projectId, {
+      let extraction: ExperimentalEvidenceExtraction | null = null
+      let extractionUnavailable = false
+      if (extractable.has(evidenceKind)) {
+        try {
+          extraction = await api.extractExperimentalEvidence(projectId, {
             evidence_id: evidenceId,
             ...(artifactId ? { evidence_artifact_id: artifactId } : {}),
             kind: evidenceKind as 'xrd' | 'gixrd' | 'icp' | 'eds' | 'xps' | 'tem',
             conclusion: evidenceNote,
             instrument_info: evidenceInstrumentInfo,
           })
-        : null
+        } catch (error) {
+          if (error instanceof ApiError && (error.status === 404 || error.status === 405)) {
+            extractionUnavailable = true
+          } else {
+            throw error
+          }
+        }
+      }
       const metadata: Record<string, unknown> = extraction?.metadata ?? {
         ...(evidenceNote ? { brief_conclusion: evidenceNote } : {}),
         ...(evidenceInstrumentInfo ? { instrument_info: evidenceInstrumentInfo } : {}),
@@ -663,7 +675,12 @@ export function ExperimentalModelingWorkbench({
       }
       const revision = await api.saveExperimentalSpec(projectId, nextSpec)
       setSpecRevisionId(revision.spec_revision_id)
-      setExtractionNotices(extraction?.notices ?? [])
+      setExtractionNotices([
+        ...(extraction?.notices ?? []),
+        ...(extractionUnavailable
+          ? ['Automatic extraction is unavailable in the running backend; the file and entered notes were saved without blocking your work.']
+          : []),
+      ])
       setEvidenceNote('')
       setEvidenceInstrumentInfo('')
       setEvidenceFile(null)
@@ -680,12 +697,16 @@ export function ExperimentalModelingWorkbench({
         ? ` and identified ${inferredElements.join(', ')}`
         : ''
       onMessage(
-        'neutral',
+        extractionUnavailable ? 'warning' : 'neutral',
         tr(
-          extractedConstraintCount
+          extractionUnavailable
+            ? '已添加表征，但当前后端未提供自动提取。文件与填写内容已保存；重启 CatEx 后可恢复自动提取。'
+            : extractedConstraintCount
             ? `已添加表征${chineseInference}，并提取 ${extractedConstraintCount} 条可用于筛选的数值约束。`
             : `已添加表征${chineseInference}。信息已结构化保存；暂无可直接用于数值筛选的约束。`,
-          extractedConstraintCount
+          extractionUnavailable
+            ? 'Measurement added, but automatic extraction is unavailable in the running backend. The file and notes were saved; restart CatEx to restore extraction.'
+            : extractedConstraintCount
             ? `Measurement added${englishInference}, with ${extractedConstraintCount} numeric constraint(s) extracted for screening.`
             : `Measurement added${englishInference}. The metadata was saved; no numeric screening constraint was inferred.`,
         ),
@@ -1285,6 +1306,9 @@ export function ExperimentalModelingWorkbench({
                     <button onClick={() => setFocusedCandidateId(candidate.candidate_id)} type="button">
                       <strong>{candidate.assessment.formula}</strong>
                       <span>{localizedRecord(MODEL_KIND_LABELS, candidate.assessment.model_kind, tr)} · {candidate.assessment.num_sites} {tr('个原子', 'atoms')}</span>
+                      <small className="candidate-support-summary">
+                        {tr('总体', 'Parent')} {formatScore(candidate.assessment.parent_support)} · {tr('表面', 'Surface')} {formatScore(candidate.assessment.surface_support)} · {tr('局部', 'Local')} {formatScore(candidate.assessment.local_support)}
+                      </small>
                       <small>{tr('约束符合', 'Checks passed')} {passedChecks}/{applicableChecks.length || '—'} · {tr('来源', 'source')} {candidate.assessment.parent_reference_key}</small>
                     </button>
                   </article>
@@ -1293,7 +1317,36 @@ export function ExperimentalModelingWorkbench({
             </div>
             <article className="experimental-candidate-viewer">
               <div className="card-heading"><div><span className="eyebrow">{tr('结构预览', 'Structure preview')}</span><h3>{focusedCandidate?.assessment.formula ?? tr('选择候选结构', 'Select a candidate')}</h3></div><Atom size={18} /></div>
-              <StructureViewer structure={focusedCandidate?.viewer ?? null} />
+              <StructureViewer atomScale={0.66} structure={focusedCandidate?.viewer ?? null} />
+              {focusedCandidate && (
+                <section className="experimental-support-panel">
+                  <div className="experimental-support-heading">
+                    <div>
+                      <span className="eyebrow">PARETO SUPPORT</span>
+                      <h4>{tr('分层证据支持', 'Evidence support by depth')}</h4>
+                    </div>
+                    <small>{tr('硬约束只淘汰；背景信息不计分', 'Hard constraints only eliminate; context is not scored')}</small>
+                  </div>
+                  <div className="experimental-support-vector">
+                    <article>
+                      <span>{tr('总体结构', 'Parent structure')}</span>
+                      <strong>{formatScore(focusedCandidate.assessment.parent_support)}</strong>
+                      <small>XRD · ICP</small>
+                    </article>
+                    <article>
+                      <span>{tr('表面状态', 'Surface state')}</span>
+                      <strong>{formatScore(focusedCandidate.assessment.surface_support)}</strong>
+                      <small>XPS</small>
+                    </article>
+                    <article>
+                      <span>{tr('局部结构', 'Local structure')}</span>
+                      <strong>{formatScore(focusedCandidate.assessment.local_support)}</strong>
+                      <small>TEM · EDS</small>
+                    </article>
+                  </div>
+                  <p>{tr('“—”表示没有该深度的软证据，不按零分处理。代表性候选是在已有证据轴上互不支配的结构。', '“—” means no soft evidence is available at that depth; it is not treated as zero. Representatives are candidates that are non-dominated on their available evidence axes.')}</p>
+                </section>
+              )}
               {focusedCandidate && <details className="experimental-provenance"><summary>{tr('来源与追溯信息', 'Source and provenance')}</summary><span>{tr('参考结构', 'Reference structure')}</span><code>{focusedCandidate.assessment.parent_reference_key}</code><span>{tr('结构校验码', 'Structure checksum')}</span><code>{shortHash(focusedCandidate.assessment.structure_sha256)}</code></details>}
               {focusedCandidate && (
                 <section className="experimental-evidence-checks">

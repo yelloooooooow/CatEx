@@ -26,10 +26,12 @@ from catex.experimental.models import (
     InferenceStatus,
     LatticeSpacingConstraint,
     LocalEnvironmentConstraint,
+    ModalitySupport,
     ModelKind,
     StructuralHypothesis,
     StructureReference,
     StructureSourceKind,
+    SupportDomain,
 )
 from catex.experimental.planning import (
     CandidatePlan,
@@ -111,6 +113,7 @@ __all__ = [
     "MaterialsProjectClient",
     "MaterialsProjectFetchReport",
     "MaterialsProjectFetchResult",
+    "ModalitySupport",
     "ModelKind",
     "OpenAIResponsesTransport",
     "OptimadeCatalogFetchReport",
@@ -129,6 +132,7 @@ __all__ = [
     "StructureProvider",
     "StructureReference",
     "StructureSourceKind",
+    "SupportDomain",
     "XRDPattern",
     "XRDSearchSettings",
     "execute_candidate_recipe",

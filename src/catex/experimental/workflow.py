@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+import math
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
@@ -20,8 +21,10 @@ from catex.experimental.models import (
     EvidenceRole,
     ExperimentSpec,
     InferenceStatus,
+    ModalitySupport,
     ModelKind,
     StructuralHypothesis,
+    SupportDomain,
     content_digest,
 )
 from catex.experimental.planning import CandidatePlan, CandidatePlanner
@@ -55,7 +58,7 @@ class ExperimentalModelingReport:
     diagnostics: tuple[Diagnostic, ...]
     external_api_called: bool
     writes_performed: bool = False
-    schema_version: str = "catex.experimental-modeling-report.v1"
+    schema_version: str = "catex.experimental-modeling-report.v2"
 
     @property
     def has_errors(self) -> bool:
@@ -83,8 +86,10 @@ class ExperimentalModelingReport:
             "ambiguity_reasons": list(self.ambiguity_reasons),
             "recommended_next_experiments": list(self.recommended_next_experiments),
             "threshold_interpretation": (
-                "Configured scores are provisional ranking gates, not universal "
-                "experiment-versus-calculation error tolerances."
+                "Hard evidence is used only for exclusion. Soft checks are aggregated "
+                "within modality and support domain using geometric means; context evidence "
+                "does not score. Representatives are non-dominated on parent, surface, and "
+                "local support, with missing domains treated as incomparable rather than zero."
             ),
             "external_api_called": self.external_api_called,
             "writes_performed": self.writes_performed,
@@ -283,6 +288,63 @@ def _interval_score(value: float, lower: float, upper: float) -> tuple[str, floa
     width = max(upper - lower, 0.02)
     distance = lower - value if value < lower else value - upper
     return "outside_range", max(0.0, 1.0 - distance / width)
+
+
+_MODALITY_DOMAIN = {
+    EvidenceKind.XRD: SupportDomain.PARENT,
+    EvidenceKind.ICP: SupportDomain.PARENT,
+    EvidenceKind.XPS: SupportDomain.SURFACE,
+    EvidenceKind.EDS: SupportDomain.LOCAL,
+    EvidenceKind.TEM: SupportDomain.LOCAL,
+}
+
+
+def _normalized_modality(kind: EvidenceKind) -> EvidenceKind:
+    return EvidenceKind.XRD if kind is EvidenceKind.GIXRD else kind
+
+
+def _geometric_mean(values: tuple[float, ...]) -> float:
+    if not values:
+        raise ValueError("geometric mean requires at least one value")
+    if any(value == 0 for value in values):
+        return 0.0
+    return math.exp(sum(math.log(value) for value in values) / len(values))
+
+
+def _soft_modality_support(
+    checks: tuple[EvidenceCheck, ...],
+    spec: ExperimentSpec,
+) -> tuple[ModalitySupport, ...]:
+    evidence_by_id = {item.evidence_id: item for item in spec.evidence}
+    grouped: dict[EvidenceKind, dict[str, float]] = {}
+    for check in checks:
+        if check.score is None or check.kind == "geometry":
+            continue
+        for evidence_id in check.evidence_ids:
+            evidence = evidence_by_id.get(evidence_id)
+            if evidence is None or evidence.role is not EvidenceRole.SOFT:
+                continue
+            modality = _normalized_modality(evidence.kind)
+            if modality not in _MODALITY_DOMAIN:
+                continue
+            grouped.setdefault(modality, {})[check.check_id] = check.score
+    return tuple(
+        ModalitySupport(
+            modality=modality,
+            domain=_MODALITY_DOMAIN[modality],
+            score=_geometric_mean(tuple(check_scores.values())),
+            check_ids=tuple(sorted(check_scores)),
+        )
+        for modality, check_scores in sorted(grouped.items(), key=lambda item: item[0].value)
+    )
+
+
+def _domain_support(
+    modality_support: tuple[ModalitySupport, ...],
+    domain: SupportDomain,
+) -> float | None:
+    scores = tuple(item.score for item in modality_support if item.domain is domain)
+    return _geometric_mean(scores) if scores else None
 
 
 def _top_region_indices(structure: Structure, *, depth_angstrom: float = 3.0) -> tuple[int, ...]:
@@ -533,12 +595,8 @@ def _candidate_assessment(
     registry: ProviderRegistry,
     phase_search: PhaseSearchReport | None,
 ) -> CandidateAssessment:
-    inherited = phase_support.get(execution.recipe.parent_reference_key)
     checks = _evidence_checks(execution, spec, registry, phase_support, phase_search)
-    applicable_scores = [
-        item.score for item in checks if item.score is not None and item.kind != "geometry"
-    ]
-    evidence_score = sum(applicable_scores) / len(applicable_scores) if applicable_scores else 0.15
+    modality_support = _soft_modality_support(checks, spec)
     hard_failure = any(
         item.role is EvidenceRole.HARD and item.status == "outside_range" for item in checks
     )
@@ -557,8 +615,10 @@ def _candidate_assessment(
         formula=execution.structure.composition.reduced_formula,
         num_sites=len(execution.structure),
         valid=execution.valid and not hard_failure,
-        evidence_score=evidence_score,
-        phase_support_score=inherited,
+        modality_support=modality_support,
+        parent_support=_domain_support(modality_support, SupportDomain.PARENT),
+        surface_support=_domain_support(modality_support, SupportDomain.SURFACE),
+        local_support=_domain_support(modality_support, SupportDomain.LOCAL),
         xrd_directly_applicable=xrd_direct,
         evidence_checks=checks,
         transformation_sha256s=execution.transformation_sha256s,
@@ -566,40 +626,93 @@ def _candidate_assessment(
     )
 
 
+_SUPPORT_FIELDS = ("parent_support", "surface_support", "local_support")
+
+
+def _support_vector(assessment: CandidateAssessment) -> tuple[float | None, ...]:
+    return tuple(getattr(assessment, name) for name in _SUPPORT_FIELDS)
+
+
+def _dominates(left: CandidateAssessment, right: CandidateAssessment) -> bool:
+    left_values = _support_vector(left)
+    right_values = _support_vector(right)
+    left_mask = tuple(value is not None for value in left_values)
+    right_mask = tuple(value is not None for value in right_values)
+    if left_mask != right_mask or not any(left_mask):
+        return False
+    comparable = tuple(
+        (left_value, right_value)
+        for left_value, right_value in zip(left_values, right_values, strict=True)
+        if left_value is not None and right_value is not None
+    )
+    return all(left_value >= right_value for left_value, right_value in comparable) and any(
+        left_value > right_value for left_value, right_value in comparable
+    )
+
+
+def _pareto_frontier(
+    assessments: tuple[CandidateAssessment, ...],
+) -> tuple[CandidateAssessment, ...]:
+    return tuple(
+        candidate
+        for candidate in assessments
+        if not any(
+            other.candidate_id != candidate.candidate_id and _dominates(other, candidate)
+            for other in assessments
+        )
+    )
+
+
+def _crowding_distances(
+    frontier: tuple[CandidateAssessment, ...],
+) -> dict[str, float]:
+    distances = {item.candidate_id: 0.0 for item in frontier}
+    for field_name in _SUPPORT_FIELDS:
+        available = sorted(
+            (
+                (float(getattr(item, field_name)), item)
+                for item in frontier
+                if getattr(item, field_name) is not None
+            ),
+            key=lambda record: (record[0], record[1].candidate_id),
+        )
+        if len(available) < 2 or available[0][0] == available[-1][0]:
+            continue
+        distances[available[0][1].candidate_id] = math.inf
+        distances[available[-1][1].candidate_id] = math.inf
+        span = available[-1][0] - available[0][0]
+        for index in range(1, len(available) - 1):
+            candidate_id = available[index][1].candidate_id
+            if math.isinf(distances[candidate_id]):
+                continue
+            distances[candidate_id] += (available[index + 1][0] - available[index - 1][0]) / span
+    return distances
+
+
 def _representatives(
     assessments: tuple[CandidateAssessment, ...],
     *,
     maximum_representatives: int,
 ) -> tuple[str, ...]:
-    valid = [item for item in assessments if item.valid]
-    valid.sort(
-        key=lambda item: (
-            -item.evidence_score,
-            item.parent_reference_key,
-            item.model_kind.value,
-            item.candidate_id,
-        )
+    valid = sorted(
+        (item for item in assessments if item.valid),
+        key=lambda item: item.candidate_id,
     )
-    selected: list[CandidateAssessment] = []
+    unique: list[CandidateAssessment] = []
     seen_hashes: set[str] = set()
-    seen_groups: set[tuple[str, ModelKind]] = set()
-    for item in valid:
-        group = (item.parent_reference_key, item.model_kind)
-        if item.structure_sha256 in seen_hashes:
-            continue
-        if group not in seen_groups:
-            selected.append(item)
-            seen_hashes.add(item.structure_sha256)
-            seen_groups.add(group)
-        if len(selected) == maximum_representatives:
-            return tuple(candidate.candidate_id for candidate in selected)
     for item in valid:
         if item.structure_sha256 in seen_hashes:
             continue
-        selected.append(item)
+        unique.append(item)
         seen_hashes.add(item.structure_sha256)
-        if len(selected) == maximum_representatives:
-            break
+    frontier = _pareto_frontier(tuple(unique))
+    if len(frontier) <= maximum_representatives:
+        return tuple(item.candidate_id for item in frontier)
+    crowding = _crowding_distances(frontier)
+    selected = sorted(
+        frontier,
+        key=lambda item: (-crowding[item.candidate_id], item.candidate_id),
+    )[:maximum_representatives]
     return tuple(item.candidate_id for item in selected)
 
 
@@ -677,8 +790,7 @@ def infer_experimental_models(
         status = InferenceStatus.READY_FOR_REVIEW
         claim = ClaimLevel.PHASE_FAMILY_SUPPORTED
     elif any(
-        check.kind in {"composition", "xps", "tem"}
-        and check.status != "not_applicable"
+        check.kind in {"composition", "xps", "tem"} and check.status != "not_applicable"
         for assessment in assessments
         for check in assessment.evidence_checks
     ):
