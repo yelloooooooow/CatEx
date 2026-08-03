@@ -20,6 +20,7 @@ def test_icp_table_becomes_reviewable_composition_ranges(tmp_path) -> None:
     )
 
     assert result["review_required"] is True
+    assert result["metadata"]["automatic_extraction"]["method"] == "transparent-rule-parser-v2"
     assert result["metadata"]["instrument_info"].startswith("ICP-OES")
     assert result["composition_constraints"] == [
         {
@@ -41,6 +42,55 @@ def test_icp_table_becomes_reviewable_composition_ranges(tmp_path) -> None:
     ]
 
 
+def test_icp_conclusion_becomes_composition_ranges_without_a_table() -> None:
+    result = extract_characterization_summary(
+        None,
+        kind="icp",
+        evidence_id="icp-prose",
+        conclusion="ICP-OES结果\uff1aNi含量为62 ± 2 at.%\uff0cMo含量为38 ± 2 at.% 。",
+    )
+
+    assert [(item["element"], item["scope"]) for item in result["composition_constraints"]] == [
+        ("Ni", "bulk"),
+        ("Mo", "bulk"),
+    ]
+    assert result["composition_constraints"][0]["minimum_atomic_fraction"] == pytest.approx(0.60)
+    assert result["composition_constraints"][0]["maximum_atomic_fraction"] == pytest.approx(0.64)
+    assert "No composition table was recognized" not in result["notices"]
+
+    metal_normalized = extract_characterization_summary(
+        None,
+        kind="icp",
+        evidence_id="icp-metal-normalized",
+        conclusion="Ni: 91.45 metal at.% Mo: 8.55 metal at.%",
+    )
+    assert [item["element"] for item in metal_normalized["composition_constraints"]] == [
+        "Ni",
+        "Mo",
+    ]
+    assert all(
+        item["basis"] == "metal_normalized_atomic_fraction"
+        for item in metal_normalized["composition_constraints"]
+    )
+
+
+def test_eds_element_ratio_is_normalized_from_conclusion() -> None:
+    result = extract_characterization_summary(
+        None,
+        kind="eds",
+        evidence_id="eds-ratio",
+        conclusion="EDS面扫显示 Ni:Mo = 4:1\uff0c分布整体均匀。",
+    )
+
+    assert [item["element"] for item in result["composition_constraints"]] == ["Ni", "Mo"]
+    assert all(
+        item["basis"] == "metal_normalized_atomic_fraction"
+        for item in result["composition_constraints"]
+    )
+    assert result["composition_constraints"][0]["minimum_atomic_fraction"] == pytest.approx(0.76)
+    assert result["composition_constraints"][0]["maximum_atomic_fraction"] == pytest.approx(0.84)
+
+
 def test_xps_peak_table_and_instrument_text_extract_bounded_metadata(tmp_path) -> None:
     table = tmp_path / "xps.csv"
     table.write_text(
@@ -59,6 +109,21 @@ def test_xps_peak_table_and_instrument_text_extract_bounded_metadata(tmp_path) -
     assert result["metadata"]["xps_source"] == "AlKa"
     assert constraint["element"] == "Mo"
     assert constraint["neighbor_element"] == "O"
+    assert constraint["minimum_site_fraction"] == pytest.approx(0.57)
+    assert constraint["maximum_site_fraction"] == pytest.approx(0.63)
+
+
+def test_xps_quantified_chinese_conclusion_extracts_surface_environment() -> None:
+    result = extract_characterization_summary(
+        None,
+        kind="xps",
+        evidence_id="xps-prose",
+        conclusion="XPS拟合结果显示Mo\u2013O组分占Mo 3d总峰面积的60%。",
+    )
+
+    constraint = result["local_environment_constraints"][0]
+    assert constraint["element"] == "Mo"
+    assert constraint["scope"] == "surface"
     assert constraint["minimum_site_fraction"] == pytest.approx(0.57)
     assert constraint["maximum_site_fraction"] == pytest.approx(0.63)
 
@@ -102,6 +167,17 @@ def test_xrd_phase_conclusion_suggests_elements_without_unstructured_json() -> N
         conclusion="所有衍射峰均归属于Ni4Mo物相。",
     )
     assert chinese["metadata"]["reported_phase_formulas"] == ["Ni4Mo"]
+
+    substrate_card = extract_characterization_summary(
+        None,
+        kind="xrd",
+        evidence_id="xrd-pdf-card",
+        conclusion=(
+            "衍射峰主要来自Ni网基底\uff1b基底对应PDF #04-0850\uff1b"
+            "没有检测到可明确归属于其他Ni或Mo物种的衍射峰。"
+        ),
+    )
+    assert "reported_phase_formulas" not in substrate_card["metadata"]
 
 
 def test_tem_conclusion_converts_nanometres_to_angstroms() -> None:

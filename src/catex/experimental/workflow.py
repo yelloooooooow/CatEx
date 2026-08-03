@@ -4,12 +4,13 @@ from __future__ import annotations
 
 import json
 import math
+from collections.abc import Mapping
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 
 from pymatgen.analysis.diffraction.xrd import XRDCalculator
-from pymatgen.core import Element, Structure
+from pymatgen.core import Composition, Element, Structure
 
 from catex.experimental.models import (
     CandidateAssessment,
@@ -431,6 +432,25 @@ def _parent_d_spacings(structure: Structure) -> tuple[float, ...]:
     return tuple(sorted({float(item) for item in pattern.d_hkls}, reverse=True))
 
 
+def _reported_phase_formulas(metadata: Mapping[str, Any]) -> tuple[str, ...]:
+    extraction = metadata.get("automatic_extraction")
+    if isinstance(extraction, Mapping) and extraction.get("method") == "transparent-rule-parser-v1":
+        return ()
+    raw = metadata.get("reported_phase_formulas")
+    values = raw if isinstance(raw, list | tuple) else ()
+    formulas = []
+    for value in values:
+        if not isinstance(value, str):
+            continue
+        try:
+            formula = Composition(value).reduced_formula
+        except (TypeError, ValueError):
+            continue
+        if formula not in formulas:
+            formulas.append(formula)
+    return tuple(formulas)
+
+
 def _evidence_checks(
     execution: CandidateExecution,
     spec: ExperimentSpec,
@@ -469,6 +489,40 @@ def _evidence_checks(
                 ),
             )
         )
+    else:
+        parent_formula = Composition(
+            registry.get_reference(execution.recipe.parent_reference_key).formula
+        ).reduced_formula
+        for index, evidence in enumerate(
+            (
+                item
+                for item in spec.evidence
+                if item.kind in {EvidenceKind.XRD, EvidenceKind.GIXRD}
+                and _reported_phase_formulas(item.metadata)
+            ),
+            start=1,
+        ):
+            formulas = _reported_phase_formulas(evidence.metadata)
+            matched = parent_formula in formulas
+            checks.append(
+                EvidenceCheck(
+                    check_id=f"xrd-reported-phase-{index}",
+                    kind="xrd",
+                    label=f"Reported phase formula {' / '.join(formulas)}",
+                    role=evidence.role,
+                    status="within_range" if matched else "outside_range",
+                    score=1.0 if matched else 0.0,
+                    predicted_value=1.0 if matched else 0.0,
+                    experimental_minimum=1.0,
+                    experimental_maximum=1.0,
+                    unit="formula match",
+                    evidence_ids=(evidence.evidence_id,),
+                    message=(
+                        "The parent reduced formula matches the researcher-entered XRD phase "
+                        "assignment; this does not distinguish polymorphs or surface terminations."
+                    ),
+                )
+            )
     for index, constraint in enumerate(spec.composition_constraints, start=1):
         value = _composition_value(
             execution.structure,
@@ -786,7 +840,11 @@ def infer_experimental_models(
     if not representative_ids:
         status = InferenceStatus.NO_VALID_CANDIDATES
         claim = ClaimLevel.NO_ATOMIC_CLAIM
-    elif phase_search is not None and phase_search.status == "hypotheses_found":
+    elif (phase_search is not None and phase_search.status == "hypotheses_found") or any(
+        check.kind == "xrd" and check.role is EvidenceRole.SOFT and check.status == "within_range"
+        for assessment in assessments
+        for check in assessment.evidence_checks
+    ):
         status = InferenceStatus.READY_FOR_REVIEW
         claim = ClaimLevel.PHASE_FAMILY_SUPPORTED
     elif any(

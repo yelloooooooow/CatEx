@@ -25,6 +25,7 @@ from catex.experimental import (
     LatticeSpacingConstraint,
     ProviderRegistry,
     RuleCandidatePlanner,
+    RulePlannerSettings,
     StructuralHypothesis,
     StructureSourceKind,
     XRDSearchSettings,
@@ -119,6 +120,113 @@ def _prepare_case(tmp_path):
         encoding="utf-8",
     )
     return spec_path, catalog_path, structure
+
+
+def test_reported_xrd_formula_prioritizes_and_scores_the_matching_parent() -> None:
+    nickel = _nickel()
+    nickel_molybdenum = Structure(
+        Lattice.cubic(3.2),
+        ["Ni", "Mo"],
+        [[0, 0, 0], [0.5, 0.5, 0.5]],
+    )
+    registry = ProviderRegistry(
+        (
+            InMemoryStructureProvider(
+                "reported-phase",
+                (
+                    ("a-nickel", nickel, StructureSourceKind.HYPOTHETICAL),
+                    ("z-nickel-molybdenum", nickel_molybdenum, StructureSourceKind.HYPOTHETICAL),
+                ),
+            ),
+        )
+    )
+    evidence = EvidenceRecord(
+        evidence_id="xrd-conclusion",
+        kind=EvidenceKind.XRD,
+        role=EvidenceRole.SOFT,
+        metadata={"reported_phase_formulas": ["NiMo"]},
+        note="所有衍射峰均归属于NiMo物相。",
+    )
+    spec = ExperimentSpec(
+        sample_id="reported-phase",
+        evidence=(evidence,),
+        allowed_elements=("Ni", "Mo"),
+        material_pack="generic",
+    )
+
+    run = infer_experimental_models(
+        ExperimentInput(spec, {}),
+        registry,
+        RuleCandidatePlanner(
+            RulePlannerSettings(
+                maximum_parent_phases=1,
+                include_bulk_models=True,
+                maximum_recipes=1,
+            )
+        ),
+    )
+
+    assessment = run.report.candidate_assessments[0]
+    assert assessment.parent_reference_key.endswith(":z-nickel-molybdenum")
+    assert assessment.parent_support == pytest.approx(1.0)
+    assert run.report.status is InferenceStatus.READY_FOR_REVIEW
+    assert run.report.claim_ceiling is ClaimLevel.PHASE_FAMILY_SUPPORTED
+    assert any(
+        item.code == "RULE_PLANNER_REPORTED_PHASE_PRIORITIZATION" for item in run.report.diagnostics
+    )
+
+
+def test_legacy_phase_parser_results_are_ignored_until_reinterpreted() -> None:
+    registry = ProviderRegistry(
+        (
+            InMemoryStructureProvider(
+                "legacy-phase",
+                (
+                    ("a-nickel", _nickel(), StructureSourceKind.HYPOTHETICAL),
+                    (
+                        "z-nickel-molybdenum",
+                        Structure(
+                            Lattice.cubic(3.2),
+                            ["Ni", "Mo"],
+                            [[0, 0, 0], [0.5, 0.5, 0.5]],
+                        ),
+                        StructureSourceKind.HYPOTHETICAL,
+                    ),
+                ),
+            ),
+        )
+    )
+    evidence = EvidenceRecord(
+        evidence_id="legacy-xrd",
+        kind=EvidenceKind.XRD,
+        role=EvidenceRole.SOFT,
+        metadata={
+            "automatic_extraction": {"method": "transparent-rule-parser-v1"},
+            "reported_phase_formulas": ["NiMo"],
+        },
+    )
+    spec = ExperimentSpec(
+        sample_id="legacy-phase",
+        evidence=(evidence,),
+        allowed_elements=("Ni", "Mo"),
+    )
+
+    run = infer_experimental_models(
+        ExperimentInput(spec, {}),
+        registry,
+        RuleCandidatePlanner(
+            RulePlannerSettings(
+                maximum_parent_phases=1,
+                include_bulk_models=True,
+                maximum_recipes=1,
+            )
+        ),
+    )
+
+    assessment = run.report.candidate_assessments[0]
+    assert assessment.parent_reference_key.endswith(":a-nickel")
+    assert assessment.parent_support is None
+    assert not any(check.kind == "xrd" for check in assessment.evidence_checks)
 
 
 def test_end_to_end_inference_and_new_directory_materialization(tmp_path) -> None:

@@ -32,9 +32,10 @@ _PHASE_FORMULA = re.compile(
     r"(?:the\s+)?([A-Z][A-Za-z0-9.()·+-]{1,39})(?:\s+phase)?"
 )
 _PHASE_FORMULA_ZH = re.compile(
-    r"(?:归属(?:于|为)?|对应(?:于)?|鉴定为|匹配为|物相为)\s*"
+    r"(?:归属(?:于|为)?|对应于|鉴定为|匹配为|物相为)\s*"
     r"([A-Z][A-Za-z0-9.()·+-]{1,39})"
 )
+_NON_FORMULA_PHASE_TOKENS = {"COD", "ICDD", "JCPDS", "PDF"}
 _RADIATION = re.compile(r"(?i)\b(?:cu|copper)\s*k\s*(?:\u03b1|alpha|a)(?:1)?\b")
 _XPS_SOURCE = re.compile(r"(?i)\b(al|mg)\s*k\s*(?:\u03b1|alpha|a)\b")
 _VOLTAGE = re.compile(r"(?i)\b(\d+(?:\.\d+)?)\s*kV\b")
@@ -43,8 +44,28 @@ _INCIDENCE = re.compile(
     r"(\d+(?:\.\d+)?)\s*(?:deg(?:ree)?s?|\u00b0)"
 )
 _OXIDIZED = re.compile(
-    r"(?i)\b([A-Z][a-z]?)\s*(?:[-\u2013\u2014]\s*O|oxide|oxidized|"
+    r"(?i)(?<![A-Za-z])([A-Z][a-z]?)\s*(?:[-\u2013\u2014]\s*O|oxide|oxidized|"
     r"\([2345678]\+\)|[2345678]\+)"
+)
+_COMPOSITION_PROSE = re.compile(
+    r"(?i)(?<![A-Za-z])([A-Z][a-z]?)"
+    r"(?:\s*(?:content|fraction|含量|组分|原子百分比|质量分数))?\s*"
+    r"(?:=|:|为|约为|约|占)?\s*(\d+(?:\.\d+)?)\s*"
+    r"(?:(?:±|\+/-)\s*(\d+(?:\.\d+)?)\s*)?"
+    r"(metal\s*at\.?\s*%|at\.?\s*%|atomic\s*%|atom\s*%|wt\.?\s*%|"
+    r"weight\s*%|mass\s*%|%)"
+)
+_COMPOSITION_RATIO = re.compile(
+    r"(?i)(?<![A-Za-z])([A-Z][a-z]?)\s*[:/]\s*([A-Z][a-z]?)\s*"
+    r"(?:=|为|约为|约)?\s*(\d+(?:\.\d+)?)\s*[:/]\s*(\d+(?:\.\d+)?)"
+)
+_OXIDIZED_FRACTION_AFTER = re.compile(
+    r"(?i)(?<![A-Za-z])([A-Z][a-z]?)\s*[-\u2013\u2014]\s*O"
+    r"[^。.;\uFF1B\n]{0,50}?(\d+(?:\.\d+)?)\s*%"
+)
+_OXIDIZED_FRACTION_BEFORE = re.compile(
+    r"(?i)(\d+(?:\.\d+)?)\s*%[^。.;\uFF1B\n]{0,35}?"
+    r"(?<![A-Za-z])([A-Z][a-z]?)\s*(?:[-\u2013\u2014]\s*O|oxide|oxidized)"
 )
 
 
@@ -126,6 +147,8 @@ def _reported_phase_formulas(text: str) -> list[str]:
     formulas: list[str] = []
     for match in (*_PHASE_FORMULA.finditer(text), *_PHASE_FORMULA_ZH.finditer(text)):
         candidate = match.group(1).rstrip(".,;:")
+        if candidate.upper() in _NON_FORMULA_PHASE_TOKENS:
+            continue
         try:
             composition = Composition(candidate)
         except (TypeError, ValueError):
@@ -219,6 +242,80 @@ def _composition_rows(
     return constraints
 
 
+def _composition_prose(
+    text: str,
+    *,
+    kind: str,
+    evidence_id: str,
+) -> list[dict[str, Any]]:
+    """Parse only explicit percentages or elemental ratios from researcher prose."""
+
+    scope = "bulk" if kind == "icp" else "surface" if kind == "xps" else "local"
+    constraints: list[dict[str, Any]] = []
+    seen: set[tuple[str, str]] = set()
+    for match in _COMPOSITION_PROSE.finditer(text):
+        element = _element(match.group(1))
+        if element is None:
+            continue
+        unit = re.sub(r"\s+", "", match.group(4).lower())
+        basis = (
+            "weight_fraction"
+            if unit.startswith(("wt", "weight", "mass"))
+            else "metal_normalized_atomic_fraction"
+            if unit.startswith("metal")
+            else "total_atomic_fraction"
+        )
+        key = (element, basis)
+        if key in seen:
+            continue
+        lower, upper = _fraction_interval(
+            float(match.group(2)),
+            float(match.group(3)) if match.group(3) else None,
+            percent=True,
+        )
+        constraints.append(
+            {
+                "element": element,
+                "minimum_atomic_fraction": lower,
+                "maximum_atomic_fraction": upper,
+                "scope": scope,
+                "basis": basis,
+                "evidence_ids": [evidence_id],
+            }
+        )
+        seen.add(key)
+    if constraints:
+        return constraints
+
+    for match in _COMPOSITION_RATIO.finditer(text):
+        first = _element(match.group(1))
+        second = _element(match.group(2))
+        first_value = float(match.group(3))
+        second_value = float(match.group(4))
+        total = first_value + second_value
+        if first is None or second is None or first == second or total <= 0:
+            continue
+        basis = (
+            "metal_normalized_atomic_fraction"
+            if Element(first).is_metal and Element(second).is_metal
+            else "total_atomic_fraction"
+        )
+        for element, value in ((first, first_value / total), (second, second_value / total)):
+            lower, upper = _fraction_interval(value, None, percent=False)
+            constraints.append(
+                {
+                    "element": element,
+                    "minimum_atomic_fraction": lower,
+                    "maximum_atomic_fraction": upper,
+                    "scope": scope,
+                    "basis": basis,
+                    "evidence_ids": [evidence_id],
+                }
+            )
+        break
+    return constraints
+
+
 def _xps_environment_rows(
     rows: list[dict[str, str]],
     *,
@@ -246,6 +343,33 @@ def _xps_environment_rows(
             continue
         oxidized_fraction = sum(value for oxidized, value in values if oxidized) / total
         lower, upper = _fraction_interval(oxidized_fraction, None, percent=False)
+        constraints.append(
+            {
+                "element": element,
+                "neighbor_element": "O",
+                "minimum_site_fraction": lower,
+                "maximum_site_fraction": upper,
+                "cutoff_angstrom": 2.6,
+                "scope": "surface",
+                "evidence_ids": [evidence_id],
+            }
+        )
+    return constraints
+
+
+def _xps_environment_prose(text: str, *, evidence_id: str) -> list[dict[str, Any]]:
+    quantified: dict[str, float] = {}
+    for match in _OXIDIZED_FRACTION_AFTER.finditer(text):
+        if (element := _element(match.group(1))) is not None:
+            quantified[element] = float(match.group(2))
+    for match in _OXIDIZED_FRACTION_BEFORE.finditer(text):
+        if (element := _element(match.group(2))) is not None:
+            quantified[element] = float(match.group(1))
+    constraints = []
+    for element, percent in sorted(quantified.items()):
+        if not 0 <= percent <= 100:
+            continue
+        lower, upper = _fraction_interval(percent, None, percent=True)
         constraints.append(
             {
                 "element": element,
@@ -300,7 +424,7 @@ def extract_characterization_summary(
         "automatic_extraction": {
             "source_filename": source.name if source is not None else None,
             "text_table_detected": bool(rows),
-            "method": "transparent-rule-parser-v1",
+            "method": "transparent-rule-parser-v2",
         }
     }
     if conclusion.strip():
@@ -341,9 +465,13 @@ def extract_characterization_summary(
         metadata["reported_phase_formulas"] = reported_phases
 
     composition = _composition_rows(rows, kind=kind, evidence_id=evidence_id)
+    if kind in {"icp", "eds", "xps"} and not composition:
+        composition = _composition_prose(combined, kind=kind, evidence_id=evidence_id)
     local_environments = (
         _xps_environment_rows(rows, evidence_id=evidence_id) if kind == "xps" else []
     )
+    if kind == "xps" and not local_environments:
+        local_environments = _xps_environment_prose(combined, evidence_id=evidence_id)
     spacings = _spacing_rows(rows, evidence_id=evidence_id) if kind == "tem" else []
 
     if kind == "xps" and not local_environments:

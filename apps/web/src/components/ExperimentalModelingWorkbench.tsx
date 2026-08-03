@@ -63,6 +63,43 @@ const EVIDENCE_KINDS: ExperimentalEvidenceKind[] = [
   'other',
 ]
 
+type EvidenceMethodSelection = 'auto' | ExperimentalEvidenceKind
+type ExtractableEvidenceKind = 'xrd' | 'gixrd' | 'icp' | 'eds' | 'xps' | 'tem'
+
+const EXTRACTABLE_EVIDENCE_KINDS = new Set<ExperimentalEvidenceKind>([
+  'xrd', 'gixrd', 'icp', 'eds', 'xps', 'tem',
+])
+
+const EVIDENCE_DETECTION_PATTERNS: Array<{
+  kind: ExtractableEvidenceKind
+  pattern: RegExp
+}> = [
+  { kind: 'gixrd', pattern: /\bgi[- ]?xrd\b|grazing[ -]incidence|掠入射/iu },
+  { kind: 'xrd', pattern: /\bxrd\b|x(?:射线|射線)衍射|衍射峰|diffraction|all\s+(?:diffraction\s+)?peaks|(?:归属|匹配|鉴定).{0,12}物相/iu },
+  { kind: 'icp', pattern: /\bicp(?:[- ]?(?:oes|ms))?\b|电感耦合等离子/iu },
+  { kind: 'eds', pattern: /\b(?:eds|edx)\b|能谱|元素面扫|element(?:al)?\s+mapping/iu },
+  { kind: 'xps', pattern: /\bxps\b|x(?:射线|射線)光电子|光电子能谱|结合能|价态|[A-Z][a-z]?\s*[-–—]\s*O/iu },
+  { kind: 'tem', pattern: /\b(?:hr)?tem\b|\bsaed\b|透射电镜|晶格条纹|晶面间距|d[- ]?spacing|\bd\s*(?:=|:|为)\s*\d/iu },
+]
+
+export function detectExperimentalEvidenceKind(
+  conclusion: string,
+  instrumentInfo = '',
+  filename = '',
+): ExtractableEvidenceKind | null {
+  const text = `${conclusion}\n${instrumentInfo}\n${filename}`
+  const detected = EVIDENCE_DETECTION_PATTERNS
+    .map(({ kind, pattern }, priority) => {
+      const match = pattern.exec(text)
+      return match ? { kind, index: match.index, priority } : null
+    })
+    .filter((item): item is { kind: ExtractableEvidenceKind; index: number; priority: number } => item !== null)
+    .sort((left, right) => left.index - right.index || left.priority - right.priority)
+  if (detected[0]) return detected[0].kind
+  if (/\.xy$/iu.test(filename)) return 'xrd'
+  return null
+}
+
 const EVIDENCE_KIND_LABELS: Record<
   ExperimentalEvidenceKind,
   { chinese: string; english: string }
@@ -237,6 +274,64 @@ function evidenceSummary(item: ExperimentalEvidenceInput, fallback: string): str
   return typeof instrument === 'string' && instrument.trim() ? instrument : fallback
 }
 
+function metadataStrings(metadata: Record<string, unknown>, key: string): string[] {
+  const value = metadata[key]
+  return Array.isArray(value) ? value.filter((item): item is string => typeof item === 'string') : []
+}
+
+function extractionMethod(metadata: Record<string, unknown>): string | null {
+  const extraction = metadata.automatic_extraction
+  if (!extraction || typeof extraction !== 'object') return null
+  const method = (extraction as Record<string, unknown>).method
+  return typeof method === 'string' ? method : null
+}
+
+function hasLegacyInterpretation(item: ExperimentalEvidenceInput): boolean {
+  return extractionMethod(item.metadata) === 'transparent-rule-parser-v1'
+}
+
+function hasLegacyPhaseInterpretation(item: ExperimentalEvidenceInput): boolean {
+  return hasLegacyInterpretation(item)
+    && metadataStrings(item.metadata, 'reported_phase_formulas').length > 0
+}
+
+function evidenceFindingLabels(
+  item: ExperimentalEvidenceInput,
+  spec: ExperimentalSpec,
+  tr: (chinese: string, english: string) => string,
+): string[] {
+  const labels: string[] = []
+  const reportedPhases = hasLegacyPhaseInterpretation(item)
+    ? []
+    : metadataStrings(item.metadata, 'reported_phase_formulas')
+  for (const formula of reportedPhases) {
+    labels.push(tr(`物相 ${formula} · 将优先匹配母相`, `Phase ${formula} · prioritizes parent matching`))
+  }
+  const interpretedElements = metadataStrings(item.metadata, 'interpreted_elements')
+  if (interpretedElements.length) {
+    labels.push(tr(`元素 ${interpretedElements.join(', ')}`, `Elements ${interpretedElements.join(', ')}`))
+  }
+  for (const constraint of spec.composition_constraints.filter((record) => record.evidence_ids.includes(item.evidence_id))) {
+    const scope = COMPOSITION_SCOPE_LABELS[constraint.scope]
+    labels.push(
+      `${constraint.element} ${(constraint.minimum_atomic_fraction * 100).toFixed(1)}–${(constraint.maximum_atomic_fraction * 100).toFixed(1)}% · ${tr(scope.chinese, scope.english)}`,
+    )
+  }
+  for (const constraint of spec.local_environment_constraints.filter((record) => record.evidence_ids.includes(item.evidence_id))) {
+    labels.push(
+      `${constraint.element}–${constraint.neighbor_element} ${(constraint.minimum_site_fraction * 100).toFixed(1)}–${(constraint.maximum_site_fraction * 100).toFixed(1)}% · ${tr('表面环境', 'Surface environment')}`,
+    )
+  }
+  for (const constraint of spec.lattice_spacing_constraints.filter((record) => record.evidence_ids.includes(item.evidence_id))) {
+    labels.push(`d = ${constraint.d_spacing_angstrom.toFixed(3)} ± ${constraint.tolerance_angstrom.toFixed(3)} Å`)
+  }
+  if (item.metadata.radiation === 'CuKa') labels.push('Cu Kα')
+  if (typeof item.metadata.accelerating_voltage_kv === 'number') {
+    labels.push(`${item.metadata.accelerating_voltage_kv} kV`)
+  }
+  return [...new Set(labels)]
+}
+
 function localizedRecord(
   record: Record<string, { chinese: string; english: string }>,
   key: string,
@@ -257,7 +352,12 @@ function localizedCheckLabel(
   check: ExperimentalEvidenceCheck,
   tr: (chinese: string, english: string) => string,
 ): string {
-  if (check.kind === 'xrd') return tr('母体物相的 XRD 支持', 'Parent-phase XRD support')
+  if (check.kind === 'xrd') {
+    const reported = check.label.match(/^Reported phase formula (.+)$/)
+    return reported
+      ? tr(`人工判定物相 ${reported[1]}`, `Researcher-reported phase ${reported[1]}`)
+      : tr('母体物相的 XRD 支持', 'Parent-phase XRD support')
+  }
   if (check.kind === 'geometry') return tr('结构几何检查', 'Geometry validation')
   if (check.kind === 'tem') return check.label
   if (check.kind === 'xps') {
@@ -285,6 +385,7 @@ function localizedCheckMessage(
   const messages: Record<string, string> = {
     'XRD evaluates the parent crystalline phase; it does not identify this surface termination.': 'XRD 只检验母体晶相，不能确定这个具体表面终止。',
     'The simulated parent phase is compared with the measured powder pattern.': '将母体结构的模拟衍射与实验粉末图谱进行比较。',
+    'The parent reduced formula matches the researcher-entered XRD phase assignment; this does not distinguish polymorphs or surface terminations.': '母相的最简化学式与人工填写的 XRD 物相判定一致；这不能区分同组成多晶型，也不能确定表面终止。',
     'This model type does not represent the requested spatial composition scope.': '该模型类型不能表示这项表征对应的空间范围。',
     'Candidate composition is compared with the entered interval.': '候选结构的组成与实验输入范围逐项比较。',
     'This is a geometric compatibility proxy, not a simulated XPS spectrum.': '这里只检查局域几何是否相容，并未模拟 XPS 谱。',
@@ -458,12 +559,13 @@ export function ExperimentalModelingWorkbench({
   const [selectedCatalogIds, setSelectedCatalogIds] = useState<string[]>([])
   const [selectedCandidateIds, setSelectedCandidateIds] = useState<string[]>([])
   const [focusedCandidateId, setFocusedCandidateId] = useState('')
-  const [evidenceKind, setEvidenceKind] = useState<ExperimentalEvidenceKind>('xrd')
+  const [evidenceKind, setEvidenceKind] = useState<EvidenceMethodSelection>('auto')
   const [evidenceRole, setEvidenceRole] = useState<'hard' | 'soft' | 'context'>('soft')
   const [evidenceNote, setEvidenceNote] = useState('')
   const [evidenceInstrumentInfo, setEvidenceInstrumentInfo] = useState('')
   const [evidenceFile, setEvidenceFile] = useState<File | null>(null)
   const [extractionNotices, setExtractionNotices] = useState<string[]>([])
+  const [latestEvidenceId, setLatestEvidenceId] = useState('')
 
   const [constraintElement, setConstraintElement] = useState('')
   const [constraintMinimum, setConstraintMinimum] = useState('')
@@ -588,9 +690,26 @@ export function ExperimentalModelingWorkbench({
 
   const addEvidenceToDraft = async () => {
     if (!projectId) return
+    const resolvedKind = evidenceKind === 'auto'
+      ? detectExperimentalEvidenceKind(
+          evidenceNote,
+          evidenceInstrumentInfo,
+          evidenceFile?.name ?? '',
+        )
+      : evidenceKind
+    if (!resolvedKind) {
+      onMessage(
+        'warning',
+        tr(
+          '暂时无法判断这段内容属于哪种表征。请展开“更多选项”选择方法，其余内容仍会自动处理。',
+          'The measurement method could not be identified. Open “More options” and select it; the remaining content will still be interpreted automatically.',
+        ),
+      )
+      return
+    }
     setBusy('evidence')
     try {
-      const evidenceId = `${evidenceKind}-${Date.now().toString(36)}`
+      const evidenceId = `${resolvedKind}-${Date.now().toString(36)}`
       let artifactId: string | undefined
       if (evidenceFile) {
         const artifact = await api.addExperimentalEvidence(projectId, evidenceFile)
@@ -600,17 +719,14 @@ export function ExperimentalModelingWorkbench({
           ...current.filter((item) => item.evidence_artifact_id !== artifact.evidence_artifact_id),
         ])
       }
-      const extractable = new Set<ExperimentalEvidenceKind>([
-        'xrd', 'gixrd', 'icp', 'eds', 'xps', 'tem',
-      ])
       let extraction: ExperimentalEvidenceExtraction | null = null
       let extractionUnavailable = false
-      if (extractable.has(evidenceKind)) {
+      if (EXTRACTABLE_EVIDENCE_KINDS.has(resolvedKind)) {
         try {
           extraction = await api.extractExperimentalEvidence(projectId, {
             evidence_id: evidenceId,
             ...(artifactId ? { evidence_artifact_id: artifactId } : {}),
-            kind: evidenceKind as 'xrd' | 'gixrd' | 'icp' | 'eds' | 'xps' | 'tem',
+            kind: resolvedKind as ExtractableEvidenceKind,
             conclusion: evidenceNote,
             instrument_info: evidenceInstrumentInfo,
           })
@@ -622,13 +738,17 @@ export function ExperimentalModelingWorkbench({
           }
         }
       }
-      const metadata: Record<string, unknown> = extraction?.metadata ?? {
-        ...(evidenceNote ? { brief_conclusion: evidenceNote } : {}),
-        ...(evidenceInstrumentInfo ? { instrument_info: evidenceInstrumentInfo } : {}),
+      const metadata: Record<string, unknown> = {
+        ...(extraction?.metadata ?? {}),
+        ...(!extraction && evidenceNote ? { brief_conclusion: evidenceNote } : {}),
+        ...(!extraction && evidenceInstrumentInfo ? { instrument_info: evidenceInstrumentInfo } : {}),
+        ...(extraction?.suggested_elements.length
+          ? { interpreted_elements: extraction.suggested_elements }
+          : {}),
       }
       const evidence: ExperimentalEvidenceInput = {
         evidence_id: evidenceId,
-        kind: evidenceKind,
+        kind: resolvedKind,
         role: evidenceRole,
         metadata,
         ...(artifactId ? { evidence_artifact_id: artifactId } : {}),
@@ -670,6 +790,7 @@ export function ExperimentalModelingWorkbench({
         lattice_spacing_constraints: spacings,
       }
       setSpec(nextSpec)
+      setLatestEvidenceId(evidenceId)
       if (extraction?.suggested_elements.length) {
         setProviderElements(nextSpec.allowed_elements.join(', '))
       }
@@ -690,6 +811,8 @@ export function ExperimentalModelingWorkbench({
         extraction?.lattice_spacing_constraints.length ?? 0
       )
       const inferredElements = extraction?.suggested_elements ?? []
+      const inferredPhases = metadataStrings(metadata, 'reported_phase_formulas')
+      const recognizedFindingCount = extractedConstraintCount + inferredPhases.length + inferredElements.length
       const chineseInference = inferredElements.length
         ? `，并识别到元素 ${inferredElements.join(', ')}`
         : ''
@@ -697,22 +820,142 @@ export function ExperimentalModelingWorkbench({
         ? ` and identified ${inferredElements.join(', ')}`
         : ''
       onMessage(
-        extractionUnavailable ? 'warning' : 'neutral',
+        extractionUnavailable || !recognizedFindingCount ? 'warning' : 'success',
         tr(
           extractionUnavailable
             ? '已添加表征，但当前后端未提供自动提取。文件与填写内容已保存；重启 CatEx 后可恢复自动提取。'
+            : inferredPhases.length
+              ? `已识别为 ${EVIDENCE_KIND_LABELS[resolvedKind].chinese}，提取物相 ${inferredPhases.join(', ')}${chineseInference}；该物相会用于优先匹配母相候选。`
             : extractedConstraintCount
-            ? `已添加表征${chineseInference}，并提取 ${extractedConstraintCount} 条可用于筛选的数值约束。`
-            : `已添加表征${chineseInference}。信息已结构化保存；暂无可直接用于数值筛选的约束。`,
+              ? `已识别为 ${EVIDENCE_KIND_LABELS[resolvedKind].chinese}${chineseInference}，并生成 ${extractedConstraintCount} 条可审核判断。`
+              : `已识别为 ${EVIDENCE_KIND_LABELS[resolvedKind].chinese}，但没有找到足够明确的物相、比例或间距；原文已保存，请在下方检查识别结果。`,
           extractionUnavailable
             ? 'Measurement added, but automatic extraction is unavailable in the running backend. The file and notes were saved; restart CatEx to restore extraction.'
+            : inferredPhases.length
+              ? `Identified ${EVIDENCE_KIND_LABELS[resolvedKind].english}; extracted phase ${inferredPhases.join(', ')}${englishInference}. It will prioritize matching parent candidates.`
             : extractedConstraintCount
-            ? `Measurement added${englishInference}, with ${extractedConstraintCount} numeric constraint(s) extracted for screening.`
-            : `Measurement added${englishInference}. The metadata was saved; no numeric screening constraint was inferred.`,
+              ? `Identified ${EVIDENCE_KIND_LABELS[resolvedKind].english}${englishInference} and generated ${extractedConstraintCount} reviewable finding(s).`
+              : `Identified ${EVIDENCE_KIND_LABELS[resolvedKind].english}, but no explicit phase, proportion, or spacing was found. The source text was saved; review the interpretation below.`,
         ),
       )
     } catch (error) {
       reportError(error, 'Failed to add evidence.')
+    } finally {
+      setBusy(null)
+    }
+  }
+
+  const reinterpretLegacyEvidence = async (item: ExperimentalEvidenceInput) => {
+    if (!projectId || !EXTRACTABLE_EVIDENCE_KINDS.has(item.kind)) return
+    setBusy(`reinterpret-${item.evidence_id}`)
+    try {
+      const extraction = await api.extractExperimentalEvidence(projectId, {
+        evidence_id: item.evidence_id,
+        ...(item.evidence_artifact_id ? { evidence_artifact_id: item.evidence_artifact_id } : {}),
+        kind: item.kind as ExtractableEvidenceKind,
+        conclusion: typeof item.metadata.brief_conclusion === 'string'
+          ? item.metadata.brief_conclusion
+          : item.note,
+        instrument_info: typeof item.metadata.instrument_info === 'string'
+          ? item.metadata.instrument_info
+          : '',
+      })
+      const updatedEvidence: ExperimentalEvidenceInput = {
+        ...item,
+        metadata: {
+          ...extraction.metadata,
+          ...(extraction.suggested_elements.length
+            ? { interpreted_elements: extraction.suggested_elements }
+            : {}),
+        },
+      }
+      const composition = spec.composition_constraints.flatMap((record) => {
+        if (!record.evidence_ids.includes(item.evidence_id)) return [record]
+        const evidenceIds = record.evidence_ids.filter((id) => id !== item.evidence_id)
+        return evidenceIds.length ? [{ ...record, evidence_ids: evidenceIds }] : []
+      })
+      for (const constraint of extraction.composition_constraints) {
+        const key = `${constraint.element.toLowerCase()}|${constraint.scope}|${constraint.basis}`
+        const index = composition.findIndex((record) => (
+          `${record.element.toLowerCase()}|${record.scope}|${record.basis}` === key
+        ))
+        if (index >= 0) {
+          composition[index] = {
+            ...constraint,
+            evidence_ids: [...new Set([...composition[index].evidence_ids, ...constraint.evidence_ids])],
+          }
+        } else composition.push(constraint)
+      }
+      const environments = spec.local_environment_constraints.flatMap((record) => {
+        if (!record.evidence_ids.includes(item.evidence_id)) return [record]
+        const evidenceIds = record.evidence_ids.filter((id) => id !== item.evidence_id)
+        return evidenceIds.length ? [{ ...record, evidence_ids: evidenceIds }] : []
+      })
+      for (const constraint of extraction.local_environment_constraints) {
+        const key = `${constraint.element.toLowerCase()}|${constraint.neighbor_element.toLowerCase()}|${constraint.scope}`
+        const index = environments.findIndex((record) => (
+          `${record.element.toLowerCase()}|${record.neighbor_element.toLowerCase()}|${record.scope}` === key
+        ))
+        if (index >= 0) {
+          environments[index] = {
+            ...constraint,
+            evidence_ids: [...new Set([...environments[index].evidence_ids, ...constraint.evidence_ids])],
+          }
+        } else environments.push(constraint)
+      }
+      const spacings = spec.lattice_spacing_constraints.flatMap((record) => {
+        if (!record.evidence_ids.includes(item.evidence_id)) return [record]
+        const evidenceIds = record.evidence_ids.filter((id) => id !== item.evidence_id)
+        return evidenceIds.length ? [{ ...record, evidence_ids: evidenceIds }] : []
+      })
+      for (const constraint of extraction.lattice_spacing_constraints) {
+        const index = spacings.findIndex((record) => (
+          Math.abs(record.d_spacing_angstrom - constraint.d_spacing_angstrom) < 1e-6
+        ))
+        if (index >= 0) {
+          spacings[index] = {
+            ...constraint,
+            evidence_ids: [...new Set([...spacings[index].evidence_ids, ...constraint.evidence_ids])],
+          }
+        } else spacings.push(constraint)
+      }
+      const nextSpec: ExperimentalSpec = {
+        ...spec,
+        allowed_elements: [...new Set([...spec.allowed_elements, ...extraction.suggested_elements])],
+        evidence: spec.evidence.map((record) => (
+          record.evidence_id === item.evidence_id ? updatedEvidence : record
+        )),
+        composition_constraints: composition,
+        local_environment_constraints: environments,
+        lattice_spacing_constraints: spacings,
+      }
+      const revision = await api.saveExperimentalSpec(projectId, nextSpec)
+      setSpec(nextSpec)
+      setSpecRevisionId(revision.spec_revision_id)
+      setLatestEvidenceId(item.evidence_id)
+      setExtractionNotices(extraction.notices)
+      const phases = metadataStrings(updatedEvidence.metadata, 'reported_phase_formulas')
+      const findingCount = phases.length
+        + extraction.composition_constraints.length
+        + extraction.local_environment_constraints.length
+        + extraction.lattice_spacing_constraints.length
+      onMessage(
+        findingCount ? 'success' : 'neutral',
+        tr(
+          phases.length
+            ? `已重新分析，识别到物相 ${phases.join(', ')}。`
+            : findingCount
+              ? `已重新分析，并生成 ${findingCount} 条可审核判断。`
+              : '已重新分析；旧版误判已移除，没有发现足够明确的可操作结果。',
+          phases.length
+            ? `Reinterpreted; identified phase ${phases.join(', ')}.`
+            : findingCount
+              ? `Reinterpreted and generated ${findingCount} reviewable finding(s).`
+              : 'Reinterpreted; the legacy false positive was removed and no explicit actionable finding was identified.',
+        ),
+      )
+    } catch (error) {
+      reportError(error, 'Failed to reinterpret legacy phase evidence.')
     } finally {
       setBusy(null)
     }
@@ -1080,35 +1323,78 @@ export function ExperimentalModelingWorkbench({
             <FileUp size={18} />
           </div>
           <div className="experimental-evidence-composer">
-            <label>{tr('表征方法', 'Method')}<select value={evidenceKind} onChange={(event) => setEvidenceKind(event.target.value as ExperimentalEvidenceKind)}>{EVIDENCE_KINDS.map((item) => <option key={item} value={item}>{tr(EVIDENCE_KIND_LABELS[item].chinese, EVIDENCE_KIND_LABELS[item].english)}</option>)}</select></label>
-            <label>{tr('这项数据如何使用', 'How to use this data')}<select value={evidenceRole} onChange={(event) => setEvidenceRole(event.target.value as 'hard' | 'soft' | 'context')}><option value="hard">{tr(EVIDENCE_ROLE_LABELS.hard.chinese, EVIDENCE_ROLE_LABELS.hard.english)}</option><option value="soft">{tr(EVIDENCE_ROLE_LABELS.soft.chinese, EVIDENCE_ROLE_LABELS.soft.english)}</option><option value="context">{tr(EVIDENCE_ROLE_LABELS.context.chinese, EVIDENCE_ROLE_LABELS.context.english)}</option></select></label>
-            <label className="file-field"><span>{tr('数据文件或结果表（可选）', 'Data file or result table (optional)')}</span><input onChange={(event) => setEvidenceFile(event.target.files?.[0] ?? null)} type="file" /></label>
-            <label className="wide">{tr('简短结论（可选）', 'Brief conclusion (optional)')}<input value={evidenceNote} onChange={(event) => setEvidenceNote(event.target.value)} placeholder={tr('例如：Mo–O存在；d = 2.03 ± 0.05 Å', 'e.g. Mo–O is present; d = 2.03 ± 0.05 Å')} /></label>
-            <label className="wide">{tr('仪器与测试条件（可选）', 'Instrument and measurement conditions (optional)')}<input value={evidenceInstrumentInfo} onChange={(event) => setEvidenceInstrumentInfo(event.target.value)} placeholder={tr('例如：Cu Kα；GIXRD入射角0.5°；Ni网基底', 'e.g. Cu Kα; GIXRD 0.5° incidence; Ni mesh substrate')} /></label>
-            <button className="secondary-button accent" disabled={busy !== null || (!evidenceFile && !evidenceNote.trim() && !evidenceInstrumentInfo.trim())} onClick={() => void addEvidenceToDraft()} type="button">{busy === 'evidence' ? <LoaderCircle className="spin" size={15} /> : <Plus size={15} />} {tr('添加并自动提取', 'Add and extract')}</button>
+            <div className="experimental-conclusion-heading">
+              <Sparkles size={17} />
+              <span>
+                <strong>{tr('粘贴表征结论', 'Paste a characterization conclusion')}</strong>
+                <small>{tr('CatEx 自动判断方法、元素、物相、比例和晶面间距。', 'CatEx identifies the method, elements, phases, proportions, and d-spacings.')}</small>
+              </span>
+            </div>
+            <label className="experimental-conclusion-field">
+              <span>{tr('结论或结果摘要', 'Conclusion or result summary')}</span>
+              <textarea
+                aria-label={tr('结论或结果摘要', 'Conclusion or result summary')}
+                onChange={(event) => setEvidenceNote(event.target.value)}
+                placeholder={tr(
+                  '例如：XRD所有衍射峰均归属于Ni₄Mo物相。\n或：ICP测得Ni 62±2 at.%，Mo 38±2 at.% 。\n或：XPS拟合显示Mo–O组分约占60%；HRTEM晶面间距d=0.208±0.004 nm。',
+                  'e.g. XRD peaks are assigned to Ni4Mo; ICP gives Ni 62±2 at.% and Mo 38±2 at.%; XPS gives 60% Mo–O; HRTEM d=0.208±0.004 nm.',
+                )}
+                rows={5}
+                value={evidenceNote}
+              />
+            </label>
+            <div className="experimental-evidence-primary-actions">
+              <label className="file-field"><span>{tr('也可附加数据文件或结果表', 'Optionally attach a data file or result table')}</span><input onChange={(event) => setEvidenceFile(event.target.files?.[0] ?? null)} type="file" /></label>
+              <button className="secondary-button accent" disabled={busy !== null || (!evidenceFile && !evidenceNote.trim() && !evidenceInstrumentInfo.trim())} onClick={() => void addEvidenceToDraft()} type="button">{busy === 'evidence' ? <LoaderCircle className="spin" size={15} /> : <Sparkles size={15} />} {tr('分析并添加', 'Interpret and add')}</button>
+            </div>
+            <details className="experimental-evidence-options">
+              <summary>{tr('更多选项 · 仅在自动识别不正确时调整', 'More options · adjust only if automatic identification is wrong')}</summary>
+              <div>
+                <label>{tr('表征方法', 'Method')}<select value={evidenceKind} onChange={(event) => setEvidenceKind(event.target.value as EvidenceMethodSelection)}><option value="auto">{tr('自动识别（推荐）', 'Automatic (recommended)')}</option>{EVIDENCE_KINDS.map((item) => <option key={item} value={item}>{tr(EVIDENCE_KIND_LABELS[item].chinese, EVIDENCE_KIND_LABELS[item].english)}</option>)}</select></label>
+                <label>{tr('证据作用', 'Evidence role')}<select value={evidenceRole} onChange={(event) => setEvidenceRole(event.target.value as 'hard' | 'soft' | 'context')}><option value="soft">{tr('用于比较候选（推荐）', 'Compare candidates (recommended)')}</option><option value="hard">{tr('不符合即淘汰', 'Exclude if unmatched')}</option><option value="context">{tr('仅作背景，不计分', 'Context only, no score')}</option></select></label>
+                <label className="wide">{tr('仪器与测试条件（可选，也可直接写在上方）', 'Instrument and conditions (optional; may be included above)')}<input value={evidenceInstrumentInfo} onChange={(event) => setEvidenceInstrumentInfo(event.target.value)} placeholder={tr('例如：Cu Kα；GIXRD入射角0.5°；Ni网基底', 'e.g. Cu Kα; GIXRD 0.5° incidence; Ni mesh substrate')} /></label>
+              </div>
+            </details>
           </div>
-          <small className="experimental-field-help">{tr('数据文件、简短结论或仪器信息至少提供一项。CatEx会从常见CSV/文本表格和明确结论中提取可检查信息；原始XPS谱和TEM图片不会被无依据自动判读。', 'Provide at least a data file, short conclusion, or instrument note. CatEx extracts reviewable values from common CSV/text tables and explicit conclusions; it does not guess oxidation states from raw XPS or lattice spacings from a TEM image.')}</small>
+          <small className="experimental-field-help">{tr('通常只需粘贴一段结论并点击“分析并添加”。默认结果用于比较候选，不会因为一句含糊表述直接淘汰结构；原始XPS谱和TEM图片也不会被无依据自动判读。', 'Usually, paste a conclusion and select “Interpret and add.” Findings compare candidates by default and do not exclude structures from an ambiguous statement; raw XPS spectra and TEM images are not guessed without an explicit interpretation.')}</small>
           {extractionNotices.map((notice) => <div className="experimental-warning" key={notice}><TriangleAlert size={15} /> {tr(EXTRACTION_NOTICE_LABELS[notice] ?? notice, notice)}</div>)}
 
           <div className="experimental-evidence-list">
-            {spec.evidence.map((item) => (
-              <div key={item.evidence_id}>
-                <span className={`evidence-role role-${item.role}`}>{tr(EVIDENCE_ROLE_LABELS[item.role].chinese, EVIDENCE_ROLE_LABELS[item.role].english)}</span>
-                <strong>{tr(EVIDENCE_KIND_LABELS[item.kind].chinese, EVIDENCE_KIND_LABELS[item.kind].english)}</strong>
-                <span>{evidenceSummary(item, tr('未填写摘要', 'No summary'))}</span>
-                <span className="evidence-source">{item.evidence_artifact_id
-                  ? tr('已上传文件', 'Uploaded file')
-                  : item.metadata.brief_conclusion
-                    ? tr('人工结论', 'Manual conclusion')
-                    : tr('仪器信息', 'Instrument note')}</span>
-                <button aria-label={tr('删除这项表征', 'Remove measurement')} disabled={busy !== null} onClick={() => void removeEvidence(item.evidence_id)} type="button"><Trash2 size={14} /></button>
-              </div>
-            ))}
+            {spec.evidence.map((item) => {
+              const findings = evidenceFindingLabels(item, spec, tr)
+              const legacyInterpretation = hasLegacyInterpretation(item)
+              const legacyPhase = hasLegacyPhaseInterpretation(item)
+              return (
+                <div className={item.evidence_id === latestEvidenceId ? 'latest' : ''} key={item.evidence_id}>
+                  <div className="experimental-evidence-heading">
+                    <strong>{tr(EVIDENCE_KIND_LABELS[item.kind].chinese, EVIDENCE_KIND_LABELS[item.kind].english)}</strong>
+                    {item.evidence_id === latestEvidenceId && <span className="success-chip">{tr('刚刚识别', 'Just interpreted')}</span>}
+                    <span className={`evidence-role role-${item.role}`}>{tr(EVIDENCE_ROLE_LABELS[item.role].chinese, EVIDENCE_ROLE_LABELS[item.role].english)}</span>
+                    <div className="experimental-evidence-actions">
+                      {legacyInterpretation && EXTRACTABLE_EVIDENCE_KINDS.has(item.kind) && <button aria-label={tr('重新分析这项表征', 'Reinterpret this measurement')} disabled={busy !== null} onClick={() => void reinterpretLegacyEvidence(item)} title={tr('点击使用当前规则重新分析旧版结果', 'Reinterpret the legacy result with current rules')} type="button"><RefreshCw className={busy === `reinterpret-${item.evidence_id}` ? 'spin' : ''} size={14} /></button>}
+                      <button aria-label={tr('删除这项表征', 'Remove measurement')} disabled={busy !== null} onClick={() => void removeEvidence(item.evidence_id)} type="button"><Trash2 size={14} /></button>
+                    </div>
+                  </div>
+                  <p>{evidenceSummary(item, tr('未填写摘要', 'No summary'))}</p>
+                  <div aria-label={tr('自动识别结果', 'Automatic interpretation')} className="experimental-evidence-findings">
+                    {findings.map((finding) => <span key={finding}><CheckCircle2 size={12} />{finding}</span>)}
+                    {legacyPhase && <span className="unresolved"><TriangleAlert size={12} />{tr('旧版物相结果已忽略，请点击右上角重新分析', 'Legacy phase result ignored; use the top-right reinterpret button')}</span>}
+                    {legacyInterpretation && !legacyPhase && <span className="unresolved"><RefreshCw size={12} />{tr('这是旧版提取结果，可点击右上角用当前规则重新分析', 'Legacy extraction; use the top-right button to reinterpret with current rules')}</span>}
+                    {!findings.length && !legacyInterpretation && <span className="unresolved"><TriangleAlert size={12} />{tr('已保存原文，但尚未识别出可用于建模的明确结果', 'Source saved; no explicit model-building finding was identified')}</span>}
+                  </div>
+                  <small className="evidence-source">{item.evidence_artifact_id
+                    ? tr('含已上传文件', 'Includes uploaded file')
+                    : item.metadata.brief_conclusion
+                      ? tr('来自人工结论', 'From researcher conclusion')
+                      : tr('来自仪器信息', 'From instrument note')}</small>
+                </div>
+              )
+            })}
             {!spec.evidence.length && <p className="panel-empty">{tr('还没有添加表征数据。建议优先添加 XRD、ICP、XPS 和 TEM；缺少某一项也可以继续。', 'No measurements added. Start with XRD, ICP, XPS, and TEM when available; missing data does not block the workflow.')}</p>}
           </div>
 
-          <details className="experimental-constraint-editor" open={Boolean(spec.composition_constraints.length || spec.local_environment_constraints.length || spec.lattice_spacing_constraints.length)}>
-            <summary>{tr('检查或补充自动提取结果', 'Review or add extracted constraints')}</summary>
+          <details className="experimental-constraint-editor">
+            <summary>{tr('高级校对 · 通常无需填写', 'Advanced correction · usually unnecessary')}</summary>
 
             <h4 className="experimental-subheading">{tr('组成范围 · ICP / EDS / XPS', 'Composition · ICP / EDS / XPS')}</h4>
             <div className="experimental-constraint-composer">
@@ -1317,7 +1603,7 @@ export function ExperimentalModelingWorkbench({
             </div>
             <article className="experimental-candidate-viewer">
               <div className="card-heading"><div><span className="eyebrow">{tr('结构预览', 'Structure preview')}</span><h3>{focusedCandidate?.assessment.formula ?? tr('选择候选结构', 'Select a candidate')}</h3></div><Atom size={18} /></div>
-              <StructureViewer atomScale={0.66} structure={focusedCandidate?.viewer ?? null} />
+              <StructureViewer atomScale={0.68} cameraZoom={1.25} structure={focusedCandidate?.viewer ?? null} />
               {focusedCandidate && (
                 <section className="experimental-support-panel">
                   <div className="experimental-support-heading">

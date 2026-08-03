@@ -7,6 +7,7 @@ import type { ViewerPayload } from '../types'
 interface StructureViewerProps {
   structure: ViewerPayload | null
   atomScale?: number
+  cameraZoom?: number
   fixedAtomIndices1Based?: number[]
   mobileAtomIndices1Based?: number[]
   focusedAtomIndex1Based?: number | null
@@ -21,6 +22,12 @@ interface ExtendedHighlightManager {
 }
 
 const EMPTY_ATOM_INDICES: number[] = []
+
+function fitViewerToStructure(viewer: WeasViewer, cameraZoom: number) {
+  viewer.tjs.onWindowResize?.()
+  viewer.tjs.updateCameraAndControls?.({ direction: [0, 0, 100], zoom: cameraZoom })
+  viewer.render()
+}
 
 function zeroBased(indices: number[], siteCount: number): number[] {
   return [...new Set(indices)]
@@ -82,6 +89,7 @@ function synchronizeConstraintVisualization(
 export function StructureViewer({
   structure,
   atomScale = 0.58,
+  cameraZoom = 1.2,
   fixedAtomIndices1Based = EMPTY_ATOM_INDICES,
   mobileAtomIndices1Based = EMPTY_ATOM_INDICES,
   focusedAtomIndex1Based = null,
@@ -99,6 +107,7 @@ export function StructureViewer({
   const effectiveFocusedAtom = focusedAtomIndex1Based ?? inspectedAtomIndex1Based
   const effectiveShowAtomIndices = showAtomIndices || internalShowAtomIndices
   const effectiveAtomScale = Math.min(1.2, Math.max(0.3, atomScale))
+  const effectiveCameraZoom = Math.min(4, Math.max(0.8, cameraZoom))
   const elementCounts = useMemo(() => {
     const counts = new Map<string, number>()
     for (const element of structure?.species ?? []) {
@@ -134,6 +143,8 @@ export function StructureViewer({
     setViewerError(null)
     let viewer: WeasViewer | null = null
     let disposed = false
+    let fitFrame: number | null = null
+    let resizeObserver: ResizeObserver | null = null
     const pendingClickTimers = new Set<number>()
     void import('weas')
       .then(({ Atoms, WEAS }) => {
@@ -182,6 +193,19 @@ export function StructureViewer({
           effectiveFocusedAtom,
           effectiveShowAtomIndices,
         )
+        const scheduleFit = () => {
+          if (fitFrame !== null) window.cancelAnimationFrame(fitFrame)
+          fitFrame = window.requestAnimationFrame(() => {
+            fitFrame = null
+            if (!disposed && viewer) fitViewerToStructure(viewer, effectiveCameraZoom)
+          })
+        }
+        fitViewerToStructure(viewer, effectiveCameraZoom)
+        scheduleFit()
+        if (typeof ResizeObserver !== 'undefined') {
+          resizeObserver = new ResizeObserver(scheduleFit)
+          resizeObserver.observe(container)
+        }
       })
       .catch((error: unknown) => {
         if (!disposed) {
@@ -209,6 +233,8 @@ export function StructureViewer({
       disposed = true
       container.removeEventListener('click', handleViewerClick)
       pendingClickTimers.forEach((timer) => window.clearTimeout(timer))
+      if (fitFrame !== null) window.cancelAnimationFrame(fitFrame)
+      resizeObserver?.disconnect()
       if (viewerRef.current === viewer) viewerRef.current = null
       viewer?.avr.destroy?.()
       viewer?.clear()
@@ -216,7 +242,7 @@ export function StructureViewer({
     }
   // Visual constraint props are synchronized by the effect below without rebuilding WebGL.
   // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [effectiveAtomScale, structure, tr])
+  }, [effectiveAtomScale, effectiveCameraZoom, structure, tr])
 
   useEffect(() => {
     if (!structure || !viewerRef.current) return
@@ -258,13 +284,18 @@ export function StructureViewer({
         <div className="viewer-inspector">
           <div className="viewer-inspector-toolbar">
             <span>{tr('只读查看 · 点击原子显示元素和坐标', 'Read only · click an atom for element and coordinates')}</span>
-            <button
-              className={effectiveShowAtomIndices ? 'active' : ''}
-              onClick={() => setInternalShowAtomIndices((current) => !current)}
-              type="button"
-            >
-              {effectiveShowAtomIndices ? tr('隐藏原子编号', 'Hide atom indices') : tr('显示原子编号', 'Show atom indices')}
-            </button>
+            <div>
+              <button onClick={() => viewerRef.current && fitViewerToStructure(viewerRef.current, effectiveCameraZoom)} type="button">
+                {tr('适应窗口', 'Fit structure')}
+              </button>
+              <button
+                className={effectiveShowAtomIndices ? 'active' : ''}
+                onClick={() => setInternalShowAtomIndices((current) => !current)}
+                type="button"
+              >
+                {effectiveShowAtomIndices ? tr('隐藏原子编号', 'Hide atom indices') : tr('显示原子编号', 'Show atom indices')}
+              </button>
+            </div>
           </div>
           <div className="viewer-element-counts">
             {elementCounts.map(([element, count]) => <span key={element}><strong>{element}</strong>{count}</span>)}

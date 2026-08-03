@@ -4,7 +4,10 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { ApiError } from '../api'
 import { I18nProvider } from '../i18n'
 import type { ExperimentalModelingCapabilities } from '../types'
-import { ExperimentalModelingWorkbench } from './ExperimentalModelingWorkbench'
+import {
+  detectExperimentalEvidenceKind,
+  ExperimentalModelingWorkbench,
+} from './ExperimentalModelingWorkbench'
 
 const mocks = vi.hoisted(() => ({
   saveCredential: vi.fn(),
@@ -199,6 +202,55 @@ describe('experimental credential editor', () => {
     expect(screen.queryByText('Sample stage')).not.toBeInTheDocument()
   })
 
+  it('detects common researcher conclusions without requiring a method field', () => {
+    expect(detectExperimentalEvidenceKind('所有衍射峰均归属于Ni4Mo物相。')).toBe('xrd')
+    expect(detectExperimentalEvidenceKind('ICP-OES: Ni 62±2 at.%, Mo 38±2 at.%')).toBe('icp')
+    expect(detectExperimentalEvidenceKind('XPS拟合显示Mo–O组分占60%。')).toBe('xps')
+    expect(detectExperimentalEvidenceKind('HRTEM晶面间距d=0.208 nm。')).toBe('tem')
+  })
+
+  it('shows qualitative phase extraction as a usable interpretation', async () => {
+    const onMessage = vi.fn()
+    mocks.extractEvidence.mockImplementation(async (_projectId, payload) => ({
+      schema_version: 'catex.evidence-extraction.v1',
+      metadata: {
+        brief_conclusion: payload.conclusion,
+        reported_phase_formulas: ['Ni4Mo'],
+      },
+      composition_constraints: [],
+      local_environment_constraints: [],
+      lattice_spacing_constraints: [],
+      suggested_elements: ['Mo', 'Ni'],
+      notices: [],
+      automatic: true,
+      review_required: true,
+    }))
+    render(
+      <I18nProvider>
+        <ExperimentalModelingWorkbench
+          artifacts={[]}
+          onArtifactsChanged={vi.fn()}
+          onMessage={onMessage}
+          onOpenStructures={vi.fn()}
+          projectId="project-1"
+        />
+      </I18nProvider>,
+    )
+
+    fireEvent.change(await screen.findByLabelText('Conclusion or result summary'), {
+      target: { value: '所有衍射峰均归属于Ni4Mo物相。' },
+    })
+    fireEvent.click(screen.getByRole('button', { name: 'Interpret and add' }))
+
+    await waitFor(() => expect(mocks.extractEvidence).toHaveBeenCalledWith(
+      'project-1',
+      expect.objectContaining({ kind: 'xrd' }),
+    ))
+    expect(await screen.findByText(/Phase Ni4Mo · prioritizes parent matching/)).toBeInTheDocument()
+    expect(screen.getByText(/Elements Mo, Ni/)).toBeInTheDocument()
+    expect(onMessage).toHaveBeenCalledWith('success', expect.stringContaining('prioritize'))
+  })
+
   it('keeps bulk and surface composition ranges for the same element', async () => {
     render(
       <I18nProvider>
@@ -245,10 +297,10 @@ describe('experimental credential editor', () => {
       </I18nProvider>,
     )
 
-    fireEvent.change(await screen.findByLabelText('Brief conclusion (optional)'), {
+    fireEvent.change(await screen.findByLabelText('Conclusion or result summary'), {
       target: { value: 'All peaks belong to Ni4Mo.' },
     })
-    fireEvent.click(screen.getByRole('button', { name: 'Add and extract' }))
+    fireEvent.click(screen.getByRole('button', { name: 'Interpret and add' }))
 
     await waitFor(() => expect(mocks.saveSpec).toHaveBeenCalled())
     expect(onMessage).toHaveBeenCalledWith(

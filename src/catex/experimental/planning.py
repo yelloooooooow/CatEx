@@ -10,6 +10,8 @@ from collections.abc import Mapping, Sequence
 from dataclasses import dataclass
 from typing import Any, Protocol
 
+from pymatgen.core import Composition
+
 from catex.experimental.models import (
     CandidateOperation,
     CandidateOperationKind,
@@ -179,6 +181,33 @@ def _bulk_supercell_scale(num_sites: int) -> list[int]:
     return [1, 1, 1]
 
 
+def _reported_phase_formulas(spec: ExperimentSpec) -> tuple[str, ...]:
+    """Collect canonical formulas explicitly assigned in XRD/GIXRD evidence."""
+
+    formulas: list[str] = []
+    for evidence in spec.evidence:
+        if evidence.kind not in {EvidenceKind.XRD, EvidenceKind.GIXRD}:
+            continue
+        extraction = evidence.metadata.get("automatic_extraction")
+        if (
+            isinstance(extraction, Mapping)
+            and extraction.get("method") == "transparent-rule-parser-v1"
+        ):
+            continue
+        raw = evidence.metadata.get("reported_phase_formulas")
+        values = raw if isinstance(raw, list | tuple) else ()
+        for value in values:
+            if not isinstance(value, str):
+                continue
+            try:
+                formula = Composition(value).reduced_formula
+            except (TypeError, ValueError):
+                continue
+            if formula not in formulas:
+                formulas.append(formula)
+    return tuple(formulas)
+
+
 class RuleCandidatePlanner:
     """Deterministic database-first baseline with no external API calls."""
 
@@ -206,7 +235,15 @@ class RuleCandidatePlanner:
             allowed_elements=spec.model_elements,
             excluded_elements=spec.excluded_elements,
         )
-        return tuple(item.key for item in references[: self.settings.maximum_parent_phases])
+        reported = set(_reported_phase_formulas(spec))
+        prioritized = sorted(
+            references,
+            key=lambda item: (
+                0 if Composition(item.formula).reduced_formula in reported else 1,
+                item.key,
+            ),
+        )
+        return tuple(item.key for item in prioritized[: self.settings.maximum_parent_phases])
 
     def plan(
         self,
@@ -219,6 +256,25 @@ class RuleCandidatePlanner:
         hypotheses: list[StructuralHypothesis] = []
         recipes: list[CandidateRecipe] = []
         diagnostics: list[Diagnostic] = []
+        reported_phases = _reported_phase_formulas(spec)
+        reported_matches = tuple(
+            key
+            for key in parent_keys
+            if Composition(registry.get_reference(key).formula).reduced_formula in reported_phases
+        )
+        if reported_phases:
+            diagnostics.append(
+                Diagnostic(
+                    "RULE_PLANNER_REPORTED_PHASE_PRIORITIZATION",
+                    Severity.INFO,
+                    "Researcher-reported XRD phase formulas were used to prioritize "
+                    "parent structures.",
+                    {
+                        "reported_phase_formulas": list(reported_phases),
+                        "matching_parent_reference_keys": list(reported_matches),
+                    },
+                )
+            )
         surface_modeling = (
             "catalyst" in spec.material_pack.lower()
             or bool(spec.local_environment_constraints)
